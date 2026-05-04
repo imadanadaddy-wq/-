@@ -1,0 +1,947 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>🌸 조식 신청 🌸</title>
+<link href="https://fonts.googleapis.com/css2?family=Nanum+Gothic:wght@400;700;800&family=Cute+Font&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --pink-light: #FFE8F0;
+    --pink-main: #FF85A1;
+    --pink-dark: #E8547A;
+    --pink-soft: #FFBDD0;
+    --cream: #FFF5F8;
+    --white: #FFFFFF;
+    --red-cute: #FF4D6D;
+    --purple-soft: #E8D5FF;
+    --purple-main: #C084FC;
+    --yellow-soft: #FFF3B0;
+    --yellow-main: #FBBF24;
+    --text-dark: #4A2040;
+    --text-mid: #8B4F6B;
+    --text-light: #C89AB5;
+    --border-pink: #FFB3CC;
+    --success: #86EFAC;
+    --success-dark: #16A34A;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+  body {
+    font-family: 'Nanum Gothic', sans-serif;
+    background: linear-gradient(160deg, #FFE8F0 0%, #FFF0F5 40%, #F0E8FF 100%);
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 0 0 40px;
+    color: var(--text-dark);
+  }
+
+  /* ── 헤더 ── */
+  .site-header {
+    width: 100%;
+    background: linear-gradient(135deg, #FF85A1 0%, #C084FC 100%);
+    padding: 18px 20px 22px;
+    text-align: center;
+    position: relative;
+    overflow: hidden;
+    box-shadow: 0 4px 20px rgba(255,133,161,0.4);
+  }
+  .site-header::before {
+    content: '';
+    position: absolute; top: -20px; left: -20px;
+    width: 120px; height: 120px;
+    background: rgba(255,255,255,0.12);
+    border-radius: 50%;
+  }
+  .site-header::after {
+    content: '';
+    position: absolute; bottom: -30px; right: -10px;
+    width: 100px; height: 100px;
+    background: rgba(255,255,255,0.1);
+    border-radius: 50%;
+  }
+  .header-title {
+    font-size: 22px;
+    font-weight: 800;
+    color: #fff;
+    letter-spacing: 1px;
+    text-shadow: 1px 2px 6px rgba(0,0,0,0.15);
+    position: relative;
+    z-index: 1;
+  }
+  .header-sub {
+    font-size: 12px;
+    color: rgba(255,255,255,0.85);
+    margin-top: 4px;
+    position: relative;
+    z-index: 1;
+  }
+  .deco-bow {
+    display: inline-block;
+    font-size: 28px;
+    vertical-align: middle;
+    margin: 0 6px;
+  }
+
+  /* ── 공통 카드 ── */
+  .card {
+    background: var(--white);
+    border-radius: 24px;
+    padding: 24px 20px;
+    margin: 0 16px;
+    box-shadow: 0 4px 24px rgba(255,133,161,0.15);
+    border: 1.5px solid var(--border-pink);
+    width: calc(100% - 32px);
+    max-width: 420px;
+  }
+  .card-title {
+    font-size: 17px;
+    font-weight: 800;
+    color: var(--pink-dark);
+    margin-bottom: 16px;
+    text-align: center;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+  }
+
+  /* ── 스텝 인디케이터 ── */
+  .step-bar {
+    display: flex;
+    justify-content: center;
+    gap: 6px;
+    padding: 16px 0 8px;
+    width: 100%;
+    max-width: 420px;
+  }
+  .step-dot {
+    width: 28px; height: 28px;
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 12px; font-weight: 800;
+    background: var(--pink-light);
+    color: var(--text-light);
+    border: 2px solid var(--border-pink);
+    transition: all 0.3s ease;
+    flex-shrink: 0;
+  }
+  .step-dot.active {
+    background: var(--pink-main);
+    color: white;
+    border-color: var(--pink-dark);
+    box-shadow: 0 2px 10px rgba(255,133,161,0.5);
+    transform: scale(1.1);
+  }
+  .step-dot.done {
+    background: var(--success);
+    color: var(--success-dark);
+    border-color: #4ADE80;
+  }
+  .step-line {
+    flex: 1; height: 2px;
+    background: var(--border-pink);
+    margin: auto;
+    max-width: 30px;
+    border-radius: 2px;
+  }
+
+  /* ── 버튼 ── */
+  .btn {
+    display: block;
+    width: 100%;
+    padding: 14px;
+    border-radius: 50px;
+    border: none;
+    font-family: 'Nanum Gothic', sans-serif;
+    font-size: 15px;
+    font-weight: 800;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    text-align: center;
+    letter-spacing: 0.5px;
+  }
+  .btn:active { transform: scale(0.96); }
+  .btn-primary {
+    background: linear-gradient(135deg, #FF85A1, #C084FC);
+    color: white;
+    box-shadow: 0 4px 16px rgba(255,133,161,0.4);
+  }
+  .btn-primary:hover { box-shadow: 0 6px 20px rgba(255,133,161,0.55); }
+  .btn-secondary {
+    background: var(--pink-light);
+    color: var(--pink-dark);
+    border: 1.5px solid var(--border-pink);
+  }
+  .btn-outline {
+    background: transparent;
+    color: var(--text-mid);
+    border: 1.5px solid var(--border-pink);
+  }
+  .btn-sm { padding: 10px 20px; font-size: 13px; width: auto; }
+
+  /* ── 역할 선택 버튼 ── */
+  .role-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 8px; }
+  .role-btn {
+    padding: 24px 12px;
+    border-radius: 20px;
+    border: 2px solid var(--border-pink);
+    background: var(--cream);
+    cursor: pointer;
+    text-align: center;
+    transition: all 0.25s;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .role-btn:active { transform: scale(0.95); }
+  .role-btn .role-icon { font-size: 36px; display: block; margin-bottom: 10px; }
+  .role-btn .role-label { font-size: 15px; font-weight: 800; color: var(--text-dark); }
+  .role-btn .role-desc { font-size: 11px; color: var(--text-light); margin-top: 4px; }
+  .role-btn.selected, .role-btn:hover {
+    border-color: var(--pink-main);
+    background: var(--pink-light);
+    box-shadow: 0 4px 14px rgba(255,133,161,0.3);
+  }
+  .role-btn.acting-selected {
+    border-color: var(--purple-main);
+    background: var(--purple-soft);
+  }
+
+  /* ── 폼 필드 ── */
+  .field { margin-bottom: 18px; }
+  .field label {
+    display: block;
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--text-mid);
+    margin-bottom: 7px;
+  }
+  .field input, .field select, .field textarea {
+    width: 100%;
+    padding: 13px 16px;
+    border-radius: 14px;
+    border: 1.5px solid var(--border-pink);
+    background: var(--cream);
+    font-family: 'Nanum Gothic', sans-serif;
+    font-size: 15px;
+    color: var(--text-dark);
+    outline: none;
+    transition: border 0.2s;
+    -webkit-appearance: none;
+  }
+  .field input:focus, .field select:focus, .field textarea:focus {
+    border-color: var(--pink-main);
+    background: #fff;
+    box-shadow: 0 0 0 3px rgba(255,133,161,0.15);
+  }
+  .field select {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%23E8547A' stroke-width='2' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 14px center;
+    padding-right: 36px;
+  }
+
+  /* ── 사진 업로드 ── */
+  .photo-upload {
+    border: 2px dashed var(--border-pink);
+    border-radius: 16px;
+    padding: 20px;
+    text-align: center;
+    cursor: pointer;
+    background: var(--cream);
+    transition: all 0.2s;
+    min-height: 120px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+  }
+  .photo-upload:active { background: var(--pink-light); }
+  .photo-upload.has-photo { border-color: var(--pink-main); background: var(--pink-light); }
+  .photo-upload .upload-icon { font-size: 32px; }
+  .photo-upload .upload-text { font-size: 13px; color: var(--text-mid); font-weight: 700; }
+  .photo-upload .upload-sub { font-size: 11px; color: var(--text-light); }
+  .photo-preview { width: 100%; max-height: 200px; object-fit: cover; border-radius: 12px; }
+  #fileInput { display: none; }
+
+  /* ── 날짜 카드 ── */
+  .date-card {
+    background: linear-gradient(135deg, var(--pink-light) 0%, var(--purple-soft) 100%);
+    border-radius: 18px;
+    padding: 16px;
+    margin-bottom: 16px;
+    border: 1.5px solid var(--border-pink);
+    text-align: center;
+  }
+  .date-big {
+    font-size: 26px;
+    font-weight: 800;
+    color: var(--pink-dark);
+    margin-bottom: 4px;
+  }
+  .date-label { font-size: 12px; color: var(--text-mid); }
+
+  /* ── 시간창 상태 배지 ── */
+  .window-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 16px;
+    border-radius: 50px;
+    font-size: 13px;
+    font-weight: 700;
+    margin-top: 10px;
+  }
+  .window-open { background: #DCFCE7; color: #16A34A; border: 1px solid #86EFAC; }
+  .window-closed { background: #FEE2E2; color: #DC2626; border: 1px solid #FCA5A5; }
+  .window-pending { background: #FEF3C7; color: #D97706; border: 1px solid #FCD34D; }
+  .window-dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+
+  /* ── 메뉴 우선순위 ── */
+  .menu-rank {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 12px;
+  }
+  .rank-badge {
+    width: 30px; height: 30px;
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 13px; font-weight: 800;
+    flex-shrink: 0;
+  }
+  .rank-1 { background: #FEF3C7; color: #D97706; border: 2px solid #FCD34D; }
+  .rank-2 { background: #F3F4F6; color: #6B7280; border: 2px solid #D1D5DB; }
+  .rank-3 { background: #FEE2E2; color: #EF4444; border: 2px solid #FCA5A5; }
+  .menu-rank input { flex: 1; margin: 0; }
+
+  /* ── 완료 화면 ── */
+  .success-wrap {
+    text-align: center;
+    padding: 10px 0;
+  }
+  .success-circle {
+    width: 80px; height: 80px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #86EFAC, #4ADE80);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 36px;
+    margin: 0 auto 16px;
+    box-shadow: 0 4px 20px rgba(74,222,128,0.4);
+  }
+  .success-title { font-size: 20px; font-weight: 800; color: var(--text-dark); margin-bottom: 8px; }
+  .success-sub { font-size: 14px; color: var(--text-mid); line-height: 1.6; margin-bottom: 20px; }
+
+  /* ── 요약 테이블 ── */
+  .summary-table { width: 100%; font-size: 14px; }
+  .summary-table tr td { padding: 7px 0; border-bottom: 1px solid var(--pink-light); }
+  .summary-table tr:last-child td { border-bottom: none; }
+  .summary-table .label { color: var(--text-light); width: 40%; }
+  .summary-table .value { color: var(--text-dark); font-weight: 700; }
+
+  /* ── 액팅 뷰 ── */
+  .acting-header {
+    background: linear-gradient(135deg, #7C3AED, #C084FC);
+    padding: 14px 20px;
+    border-radius: 16px;
+    color: white;
+    margin-bottom: 16px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .acting-count { font-size: 24px; font-weight: 800; }
+  .acting-label { font-size: 11px; opacity: 0.85; }
+  .reg-card {
+    background: var(--cream);
+    border: 1.5px solid var(--border-pink);
+    border-radius: 16px;
+    padding: 14px 16px;
+    margin-bottom: 10px;
+  }
+  .reg-card-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: 8px;
+  }
+  .reg-name { font-size: 15px; font-weight: 800; color: var(--text-dark); }
+  .reg-id { font-size: 12px; color: var(--text-light); }
+  .reg-date-badge {
+    background: var(--pink-light);
+    color: var(--pink-dark);
+    padding: 4px 10px;
+    border-radius: 50px;
+    font-size: 11px;
+    font-weight: 700;
+  }
+  .reg-menus { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+  .reg-menu-item {
+    display: flex; align-items: center; gap: 5px;
+    background: white;
+    border: 1px solid var(--border-pink);
+    border-radius: 50px;
+    padding: 4px 10px;
+    font-size: 12px;
+    color: var(--text-mid);
+  }
+  .reg-time { font-size: 11px; color: var(--text-light); margin-top: 8px; text-align: right; }
+  .empty-state { text-align: center; padding: 40px 20px; color: var(--text-light); }
+  .empty-icon { font-size: 48px; margin-bottom: 12px; }
+  .filter-bar { display: flex; gap: 8px; margin-bottom: 14px; overflow-x: auto; padding-bottom: 4px; }
+  .filter-chip {
+    padding: 7px 16px; border-radius: 50px; font-size: 13px; font-weight: 700;
+    border: 1.5px solid var(--border-pink); background: white; color: var(--text-mid);
+    white-space: nowrap; cursor: pointer; flex-shrink: 0;
+    transition: all 0.2s;
+  }
+  .filter-chip.active { background: var(--pink-main); color: white; border-color: var(--pink-dark); }
+
+  /* ── 토스트 ── */
+  .toast {
+    position: fixed; bottom: 30px; left: 50%; transform: translateX(-50%) translateY(80px);
+    background: var(--text-dark); color: white;
+    padding: 12px 24px; border-radius: 50px;
+    font-size: 14px; font-weight: 700;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+    z-index: 9999; transition: transform 0.3s ease;
+    white-space: nowrap; max-width: 90vw;
+  }
+  .toast.show { transform: translateX(-50%) translateY(0); }
+
+  /* ── 구분선 ── */
+  .divider { height: 1px; background: var(--pink-light); margin: 16px 0; }
+
+  /* ── 데이트 선택 ── */
+  .date-pills { display: flex; flex-wrap: wrap; gap: 8px; }
+  .date-pill {
+    padding: 10px 18px; border-radius: 50px; font-size: 14px; font-weight: 700;
+    border: 1.5px solid var(--border-pink); background: var(--cream); color: var(--text-mid);
+    cursor: pointer; transition: all 0.2s; flex-shrink: 0;
+  }
+  .date-pill.selected { background: var(--pink-main); color: white; border-color: var(--pink-dark); }
+  .date-pill.closed { opacity: 0.4; cursor: not-allowed; }
+
+  /* ── 애니메이션 ── */
+  @keyframes fadeInUp { from { opacity: 0; transform: translateY(18px); } to { opacity: 1; transform: translateY(0); } }
+  @keyframes bounce { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-8px); } }
+  @keyframes heartbeat { 0%,100% { transform: scale(1); } 50% { transform: scale(1.12); } }
+  .fade-in { animation: fadeInUp 0.35s ease forwards; }
+  .bounce { animation: bounce 1.5s ease infinite; }
+  .heartbeat { animation: heartbeat 1.2s ease infinite; }
+
+  .main-wrap { width: 100%; max-width: 420px; padding-top: 16px; display: flex; flex-direction: column; align-items: center; gap: 14px; }
+
+  .note-box {
+    background: var(--yellow-soft);
+    border: 1.5px solid #FCD34D;
+    border-radius: 14px;
+    padding: 12px 16px;
+    font-size: 13px;
+    color: #92400E;
+    line-height: 1.6;
+  }
+  .note-box strong { font-weight: 800; }
+
+  .back-btn {
+    display: flex; align-items: center; gap: 6px;
+    background: none; border: none; cursor: pointer;
+    font-size: 14px; color: var(--text-mid); font-family: 'Nanum Gothic', sans-serif;
+    padding: 0; font-weight: 700; margin-bottom: 4px;
+  }
+</style>
+</head>
+<body>
+
+<!-- 헤더 -->
+<header class="site-header">
+  <div class="header-title">
+    <span class="deco-bow">🎀</span>조식 신청<span class="deco-bow">🎀</span>
+  </div>
+  <div class="header-sub">✨ 행복한 아침을 미리 준비해요 ✨</div>
+</header>
+
+<!-- 토스트 -->
+<div class="toast" id="toast"></div>
+
+<!-- 앱 루트 -->
+<div class="main-wrap" id="app"></div>
+
+<script>
+// ═══════════════════════════════════════
+//  전역 상태
+// ═══════════════════════════════════════
+const STATE = {
+  role: null,         // 'acting' | 'work'
+  step: 1,            // 1=역할선택 2=사번등록 3=날짜/메뉴 4=완료
+  empId: '',
+  empName: '',
+  photoData: null,
+  selectedDate: null,
+  menu1: '', menu2: '', menu3: '',
+  actingFilter: 'all',
+};
+
+const DAYS_KO = ['일','월','화','수','목','금','토'];
+
+// ═══════════════════════════════════════
+//  로컬스토리지 헬퍼
+// ═══════════════════════════════════════
+function getRegs() {
+  try { return JSON.parse(localStorage.getItem('breakfast_regs') || '[]'); } catch { return []; }
+}
+function saveReg(reg) {
+  const list = getRegs();
+  const idx = list.findIndex(r => r.empId === reg.empId && r.date === reg.date);
+  if (idx >= 0) list[idx] = reg; else list.push(reg);
+  localStorage.setItem('breakfast_regs', JSON.stringify(list));
+}
+
+// ═══════════════════════════════════════
+//  시간창 계산
+//  조식 날짜 D 기준: D-1일 13:00 ~ D일 09:00
+// ═══════════════════════════════════════
+function getWindow(dateStr) {
+  // dateStr: 'YYYY-MM-DD'
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const open = new Date(y, m-1, d-1, 13, 0, 0);
+  const close = new Date(y, m-1, d, 9, 0, 0);
+  return { open, close };
+}
+function windowStatus(dateStr) {
+  const now = new Date();
+  const { open, close } = getWindow(dateStr);
+  if (now < open) return 'pending';
+  if (now > close) return 'closed';
+  return 'open';
+}
+function fmtDateTime(dt) {
+  return `${dt.getMonth()+1}/${dt.getDate()} ${String(dt.getHours()).padStart(2,'0')}:${String(dt.getMinutes()).padStart(2,'0')}`;
+}
+
+// ═══════════════════════════════════════
+//  조식 신청 가능 날짜 목록 생성 (오늘+7일)
+// ═══════════════════════════════════════
+function getAvailableDates() {
+  const dates = [];
+  const today = new Date();
+  today.setHours(0,0,0,0);
+  for (let i = 0; i < 8; i++) {
+    const d = new Date(today);
+    d.setDate(today.getDate() + i);
+    const str = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+    const status = windowStatus(str);
+    dates.push({ str, d, status, dayKo: DAYS_KO[d.getDay()] });
+  }
+  return dates;
+}
+
+// ═══════════════════════════════════════
+//  토스트
+// ═══════════════════════════════════════
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 2500);
+}
+
+// ═══════════════════════════════════════
+//  렌더 함수들
+// ═══════════════════════════════════════
+const app = document.getElementById('app');
+
+function render() {
+  if (STATE.role === 'acting') { renderActing(); return; }
+  switch (STATE.step) {
+    case 1: renderStep1(); break;
+    case 2: renderStep2(); break;
+    case 3: renderStep3(); break;
+    case 4: renderStep4(); break;
+  }
+}
+
+// ──── STEP 1: 역할 선택 ────
+function renderStep1() {
+  app.innerHTML = `
+    <div class="step-bar">
+      <div class="step-dot active">1</div>
+      <div class="step-line"></div>
+      <div class="step-dot">2</div>
+      <div class="step-line"></div>
+      <div class="step-dot">3</div>
+      <div class="step-line"></div>
+      <div class="step-dot">4</div>
+    </div>
+    <div class="card fade-in">
+      <div class="card-title">🌸 어떤 역할로 접속할까요?</div>
+      <div class="role-grid">
+        <div class="role-btn" id="btn-work" onclick="selectRole('work')">
+          <span class="role-icon">🏥</span>
+          <div class="role-label">근무</div>
+          <div class="role-desc">조식 신청하기</div>
+        </div>
+        <div class="role-btn acting-selected" id="btn-acting" onclick="selectRole('acting')">
+          <span class="role-icon">📋</span>
+          <div class="role-label">액팅</div>
+          <div class="role-desc">신청 현황 보기</div>
+        </div>
+      </div>
+    </div>
+    <div class="note-box" style="margin: 0 16px; width: calc(100% - 32px); max-width: 420px;">
+      💡 <strong>근무</strong>: 날짜별 조식을 미리 신청해요<br>
+      💡 <strong>액팅</strong>: 제출된 신청 현황을 확인해요
+    </div>
+  `;
+}
+function selectRole(role) {
+  STATE.role = role;
+  if (role === 'acting') { renderActing(); return; }
+  STATE.step = 2;
+  render();
+}
+
+// ──── STEP 2: 사번/이름/바코드 등록 ────
+function renderStep2() {
+  app.innerHTML = `
+    <div class="step-bar">
+      <div class="step-dot done">✓</div>
+      <div class="step-line"></div>
+      <div class="step-dot active">2</div>
+      <div class="step-line"></div>
+      <div class="step-dot">3</div>
+      <div class="step-line"></div>
+      <div class="step-dot">4</div>
+    </div>
+    <div class="card fade-in">
+      <button class="back-btn" onclick="goBack(1)">← 뒤로</button>
+      <div class="card-title">💖 직원 정보 입력</div>
+
+      <div class="field">
+        <label>사번 <span style="color:var(--red-cute)">*</span></label>
+        <input type="text" id="inp-empId" placeholder="사번을 입력하세요"
+          inputmode="numeric" value="${STATE.empId}"
+          onchange="STATE.empId=this.value.trim()">
+      </div>
+      <div class="field">
+        <label>이름 <span style="color:var(--red-cute)">*</span></label>
+        <input type="text" id="inp-name" placeholder="이름을 입력하세요"
+          value="${STATE.empName}"
+          onchange="STATE.empName=this.value.trim()">
+      </div>
+      <div class="field">
+        <label>사번 바코드 사진 <span style="color:var(--text-light)">(선택)</span></label>
+        <div class="photo-upload ${STATE.photoData ? 'has-photo' : ''}" onclick="document.getElementById('fileInput').click()">
+          ${STATE.photoData
+            ? `<img src="${STATE.photoData}" class="photo-preview" alt="바코드 미리보기">`
+            : `<span class="upload-icon">📷</span>
+               <span class="upload-text">사진을 탭해서 업로드</span>
+               <span class="upload-sub">카메라 또는 갤러리에서 선택</span>`
+          }
+        </div>
+        <input type="file" id="fileInput" accept="image/*" capture="environment" onchange="handlePhoto(event)">
+        ${STATE.photoData ? `<button class="btn btn-outline btn-sm" style="margin-top:8px" onclick="STATE.photoData=null;render()">🗑 사진 제거</button>` : ''}
+      </div>
+
+      <button class="btn btn-primary" onclick="submitStep2()">다음 단계 →</button>
+    </div>
+  `;
+}
+function handlePhoto(e) {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = ev => { STATE.photoData = ev.target.result; render(); };
+  reader.readAsDataURL(file);
+}
+function submitStep2() {
+  const id = document.getElementById('inp-empId').value.trim();
+  const name = document.getElementById('inp-name').value.trim();
+  if (!id) { showToast('⚠️ 사번을 입력해주세요'); return; }
+  if (!name) { showToast('⚠️ 이름을 입력해주세요'); return; }
+  STATE.empId = id;
+  STATE.empName = name;
+  STATE.step = 3;
+  render();
+}
+
+// ──── STEP 3: 날짜 선택 + 메뉴 입력 ────
+function renderStep3() {
+  const dates = getAvailableDates();
+  // 선택된 날짜 없으면 첫 번째 open 날짜 자동 선택
+  if (!STATE.selectedDate) {
+    const first = dates.find(d => d.status === 'open') || dates[0];
+    STATE.selectedDate = first.str;
+  }
+  const selStatus = windowStatus(STATE.selectedDate);
+  const { open, close } = getWindow(STATE.selectedDate);
+  const selDateObj = dates.find(d => d.str === STATE.selectedDate);
+
+  const statusHtml = {
+    open: `<div class="window-badge window-open"><span class="window-dot"></span>신청 가능</div>`,
+    closed: `<div class="window-badge window-closed"><span class="window-dot"></span>마감됨</div>`,
+    pending: `<div class="window-badge window-pending"><span class="window-dot"></span>신청 대기 중</div>`,
+  }[selStatus];
+
+  const [y,m,d] = STATE.selectedDate.split('-');
+
+  app.innerHTML = `
+    <div class="step-bar">
+      <div class="step-dot done">✓</div>
+      <div class="step-line"></div>
+      <div class="step-dot done">✓</div>
+      <div class="step-line"></div>
+      <div class="step-dot active">3</div>
+      <div class="step-line"></div>
+      <div class="step-dot">4</div>
+    </div>
+    <div class="card fade-in">
+      <button class="back-btn" onclick="goBack(2)">← 뒤로</button>
+      <div class="card-title">📅 날짜 선택</div>
+      <div class="date-pills" style="margin-bottom:16px">
+        ${dates.map(dt => {
+          const isSelected = dt.str === STATE.selectedDate;
+          const isClosed = dt.status === 'closed';
+          return `<div class="date-pill ${isSelected ? 'selected' : ''} ${isClosed ? 'closed' : ''}"
+            onclick="${isClosed ? '' : `selectDate('${dt.str}')`}">
+            ${Number(dt.d.getMonth())+1}/${dt.d.getDate()}(${dt.dayKo})
+          </div>`;
+        }).join('')}
+      </div>
+
+      <div class="date-card">
+        <div class="date-big">${Number(m)}월 ${Number(d)}일 (${selDateObj?.dayKo}) 조식</div>
+        <div class="date-label">신청 기간: ${fmtDateTime(open)} ~ ${fmtDateTime(close)}</div>
+        ${statusHtml}
+      </div>
+
+      ${selStatus !== 'open' ? `
+        <div class="note-box" style="margin-bottom:16px">
+          ${selStatus === 'pending' 
+            ? `⏰ 신청 시작: <strong>${fmtDateTime(open)}</strong><br>아직 신청 기간이 아니에요.`
+            : `🔒 이미 마감된 날짜예요.<br>다른 날짜를 선택해주세요.`}
+        </div>
+      ` : ''}
+
+      ${selStatus === 'open' ? `
+        <div class="divider"></div>
+        <div class="card-title" style="font-size:15px">🍽️ 메뉴 우선순위 입력</div>
+
+        <div class="menu-rank">
+          <div class="rank-badge rank-1">1위</div>
+          <input type="text" id="menu1" placeholder="1순위 메뉴" value="${STATE.menu1}"
+            onchange="STATE.menu1=this.value">
+        </div>
+        <div class="menu-rank">
+          <div class="rank-badge rank-2">2위</div>
+          <input type="text" id="menu2" placeholder="2순위 메뉴" value="${STATE.menu2}"
+            onchange="STATE.menu2=this.value">
+        </div>
+        <div class="menu-rank">
+          <div class="rank-badge rank-3">3위</div>
+          <input type="text" id="menu3" placeholder="3순위 메뉴" value="${STATE.menu3}"
+            onchange="STATE.menu3=this.value">
+        </div>
+
+        <button class="btn btn-primary" style="margin-top:8px" onclick="submitStep3()">🌸 신청 완료하기</button>
+      ` : `
+        <button class="btn btn-secondary" onclick="selectFirstOpen()">신청 가능한 날짜로 이동</button>
+      `}
+    </div>
+  `;
+}
+function selectDate(str) {
+  STATE.selectedDate = str;
+  STATE.menu1 = ''; STATE.menu2 = ''; STATE.menu3 = '';
+  renderStep3();
+}
+function selectFirstOpen() {
+  const dates = getAvailableDates();
+  const first = dates.find(d => d.status === 'open');
+  if (first) { selectDate(first.str); }
+  else { showToast('😢 현재 신청 가능한 날짜가 없어요'); }
+}
+function submitStep3() {
+  const m1 = document.getElementById('menu1')?.value.trim() || '';
+  const m2 = document.getElementById('menu2')?.value.trim() || '';
+  const m3 = document.getElementById('menu3')?.value.trim() || '';
+  if (!m1) { showToast('⚠️ 1순위 메뉴를 입력해주세요'); return; }
+  STATE.menu1 = m1; STATE.menu2 = m2; STATE.menu3 = m3;
+  // 저장
+  const reg = {
+    empId: STATE.empId,
+    empName: STATE.empName,
+    photoData: STATE.photoData || null,
+    date: STATE.selectedDate,
+    menu1: m1, menu2: m2, menu3: m3,
+    submittedAt: new Date().toISOString(),
+  };
+  saveReg(reg);
+  STATE.step = 4;
+  render();
+}
+
+// ──── STEP 4: 완료 ────
+function renderStep4() {
+  const [y,m,d] = STATE.selectedDate.split('-');
+  app.innerHTML = `
+    <div class="step-bar">
+      <div class="step-dot done">✓</div>
+      <div class="step-line"></div>
+      <div class="step-dot done">✓</div>
+      <div class="step-line"></div>
+      <div class="step-dot done">✓</div>
+      <div class="step-line"></div>
+      <div class="step-dot active done">✓</div>
+    </div>
+    <div class="card fade-in">
+      <div class="success-wrap">
+        <div class="success-circle heartbeat">🌸</div>
+        <div class="success-title">신청이 완료됐어요!</div>
+        <div class="success-sub">조식 신청이 성공적으로 등록됐어요.<br>액팅 담당자가 확인할 수 있어요.</div>
+      </div>
+      <table class="summary-table" style="margin-bottom:20px">
+        <tr>
+          <td class="label">사번</td>
+          <td class="value">${STATE.empId}</td>
+        </tr>
+        <tr>
+          <td class="label">이름</td>
+          <td class="value">${STATE.empName}</td>
+        </tr>
+        <tr>
+          <td class="label">날짜</td>
+          <td class="value">${Number(m)}월 ${Number(d)}일 조식</td>
+        </tr>
+        <tr>
+          <td class="label">1순위</td>
+          <td class="value">${STATE.menu1 || '-'}</td>
+        </tr>
+        <tr>
+          <td class="label">2순위</td>
+          <td class="value">${STATE.menu2 || '-'}</td>
+        </tr>
+        <tr>
+          <td class="label">3순위</td>
+          <td class="value">${STATE.menu3 || '-'}</td>
+        </tr>
+      </table>
+      <button class="btn btn-primary" onclick="newReg()">+ 다른 날짜 신청하기</button>
+      <button class="btn btn-outline" style="margin-top:10px" onclick="goHome()">처음으로 돌아가기</button>
+    </div>
+  `;
+}
+
+// ──── 액팅 뷰 ────
+function renderActing() {
+  const regs = getRegs();
+  // 날짜 목록
+  const allDates = [...new Set(regs.map(r => r.date))].sort();
+  const filter = STATE.actingFilter;
+
+  const filtered = filter === 'all' ? regs : regs.filter(r => r.date === filter);
+  const sorted = [...filtered].sort((a,b) => new Date(b.submittedAt) - new Date(a.submittedAt));
+
+  const datePills = ['all', ...allDates].map(d => {
+    const label = d === 'all' ? '전체' : (() => { const [,m,dd] = d.split('-'); return `${Number(m)}/${Number(dd)}`; })();
+    return `<div class="filter-chip ${filter === d ? 'active' : ''}" onclick="setActingFilter('${d}')">${label}</div>`;
+  }).join('');
+
+  const regCards = sorted.map(r => {
+    const [,m,d] = r.date.split('-');
+    const t = new Date(r.submittedAt);
+    const timeStr = `${t.getMonth()+1}/${t.getDate()} ${String(t.getHours()).padStart(2,'0')}:${String(t.getMinutes()).padStart(2,'0')} 제출`;
+    const menus = [
+      r.menu1 ? `<div class="reg-menu-item"><span style="font-size:11px;color:var(--yellow-main)">1</span>${r.menu1}</div>` : '',
+      r.menu2 ? `<div class="reg-menu-item"><span style="font-size:11px;color:var(--text-light)">2</span>${r.menu2}</div>` : '',
+      r.menu3 ? `<div class="reg-menu-item"><span style="font-size:11px;color:#EF4444">3</span>${r.menu3}</div>` : '',
+    ].filter(Boolean).join('');
+    const photoBtn = r.photoData
+      ? `<button class="btn btn-outline btn-sm" style="margin-top:8px; font-size:11px"
+           onclick="showPhoto('${r.empId}','${r.date}')">📷 바코드 보기</button>`
+      : '';
+    return `
+      <div class="reg-card">
+        <div class="reg-card-top">
+          <div>
+            <div class="reg-name">${escHtml(r.empName)}</div>
+            <div class="reg-id">사번 ${escHtml(r.empId)}</div>
+          </div>
+          <div class="reg-date-badge">${Number(m)}/${Number(d)} 조식</div>
+        </div>
+        <div class="reg-menus">${menus}</div>
+        ${photoBtn}
+        <div class="reg-time">${timeStr}</div>
+      </div>`;
+  }).join('');
+
+  app.innerHTML = `
+    <div class="card fade-in" style="margin-top:0">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+        <button class="back-btn" onclick="goHome()" style="margin-bottom:0">← 나가기</button>
+        <button class="btn btn-secondary btn-sm" onclick="clearAllRegs()">🗑 전체삭제</button>
+      </div>
+      <div class="acting-header">
+        <div>
+          <div class="acting-count">${filtered.length}건</div>
+          <div class="acting-label">${filter === 'all' ? '전체 신청 현황' : `${(() => { const [,m,d] = filter.split('-'); return `${Number(m)}/${Number(d)}`; })()} 신청 현황`}</div>
+        </div>
+        <div style="font-size:32px">📋</div>
+      </div>
+      <div class="filter-bar">${datePills}</div>
+      ${sorted.length === 0
+        ? `<div class="empty-state"><div class="empty-icon bounce">🍳</div><div>신청 내역이 없어요</div></div>`
+        : regCards
+      }
+    </div>
+
+    <!-- 사진 모달 -->
+    <div id="photoModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:999;align-items:center;justify-content:center;padding:20px"
+      onclick="closePhotoModal()">
+      <div style="background:white;border-radius:20px;padding:16px;max-width:360px;width:100%" onclick="event.stopPropagation()">
+        <div style="text-align:right;margin-bottom:8px">
+          <button class="btn btn-outline btn-sm" onclick="closePhotoModal()">✕ 닫기</button>
+        </div>
+        <img id="modalImg" src="" style="width:100%;border-radius:12px">
+      </div>
+    </div>
+  `;
+}
+function setActingFilter(d) {
+  STATE.actingFilter = d;
+  renderActing();
+}
+function showPhoto(empId, date) {
+  const regs = getRegs();
+  const r = regs.find(x => x.empId === empId && x.date === date);
+  if (r && r.photoData) {
+    document.getElementById('modalImg').src = r.photoData;
+    document.getElementById('photoModal').style.display = 'flex';
+  }
+}
+function closePhotoModal() {
+  document.getElementById('photoModal').style.display = 'none';
+}
+function clearAllRegs() {
+  if (confirm('정말 전체 신청 내역을 삭제할까요?')) {
+    localStorage.removeItem('breakfast_regs');
+    renderActing();
+    showToast('🗑 모든 내역이 삭제됐어요');
+  }
+}
+
+// ──── 헬퍼 ────
+function goBack(step) { STATE.step = step; render(); }
+function goHome() { STATE.role = null; STATE.step = 1; STATE.selectedDate = null; render(); }
+function newReg() { STATE.step = 3; STATE.selectedDate = null; STATE.menu1=''; STATE.menu2=''; STATE.menu3=''; render(); }
+function escHtml(str) {
+  return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// 최초 렌더
+render();
+</script>
+</body>
+</html>
