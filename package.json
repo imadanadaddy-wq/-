@@ -1,0 +1,17 @@
+{
+  "name": "knuh-meal-dashboard",
+  "version": "1.0.0",
+  "description": "KNUH 야식/조식 신청 대시보드",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.3.0",
+    "express": "^4.21.1"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
