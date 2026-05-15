@@ -4,14 +4,13 @@
   "description": "KNUH 야식/조식 신청 대시보드",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js",
-    "dev": "node --watch server.js"
+    "start": "node --no-warnings server.js",
+    "dev": "node --no-warnings --watch server.js"
   },
   "dependencies": {
-    "better-sqlite3": "^11.3.0",
     "express": "^4.21.1"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22.13.0"
   }
 }

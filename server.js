@@ -1,8 +1,9 @@
 // KNUH Meal Dashboard - Express + SQLite backend
+// Uses Node's built-in node:sqlite (Node 22.13+) to avoid native compilation.
 const express = require('express');
 const path = require('path');
 const fs = require('fs');
-const Database = require('better-sqlite3');
+const { DatabaseSync } = require('node:sqlite');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -11,8 +12,8 @@ const PORT = process.env.PORT || 3000;
 const DB_PATH = process.env.DATABASE_PATH || path.join(__dirname, 'data', 'knuh.db');
 fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
 
-const db = new Database(DB_PATH);
-db.pragma('journal_mode = WAL');
+const db = new DatabaseSync(DB_PATH);
+db.exec('PRAGMA journal_mode = WAL');
 
 // Schema
 db.exec(`
@@ -87,7 +88,7 @@ app.post('/api/register', (req, res) => {
   }
 
   const result = db.prepare('INSERT INTO users (employee_id, name) VALUES (?, ?)').run(employee_id, name);
-  const user = db.prepare('SELECT * FROM users WHERE id = ?').get(result.lastInsertRowid);
+  const user = db.prepare('SELECT * FROM users WHERE id = ?').get(Number(result.lastInsertRowid));
   res.json(user);
 });
 
@@ -132,7 +133,7 @@ app.post('/api/orders', (req, res) => {
     INSERT INTO meal_orders (user_id, meal_type, menu) VALUES (?, ?, ?)
   `).run(user.id, meal_type, menu);
 
-  res.json(db.prepare('SELECT * FROM meal_orders WHERE id = ?').get(result.lastInsertRowid));
+  res.json(db.prepare('SELECT * FROM meal_orders WHERE id = ?').get(Number(result.lastInsertRowid)));
 });
 
 // Get my pending orders
@@ -153,11 +154,12 @@ app.delete('/api/orders/:id', (req, res) => {
   const user = requireUser(req, res);
   if (!user) return;
 
-  const order = db.prepare('SELECT * FROM meal_orders WHERE id = ?').get(req.params.id);
+  const orderId = Number(req.params.id);
+  const order = db.prepare('SELECT * FROM meal_orders WHERE id = ?').get(orderId);
   if (!order) return res.status(404).json({ error: '주문을 찾을 수 없습니다' });
   if (order.user_id !== user.id) return res.status(403).json({ error: '본인 주문만 취소 가능합니다' });
 
-  db.prepare('DELETE FROM meal_orders WHERE id = ?').run(req.params.id);
+  db.prepare('DELETE FROM meal_orders WHERE id = ?').run(orderId);
   res.json({ ok: true });
 });
 
@@ -187,7 +189,7 @@ app.post('/api/orders/:id/pickup', (req, res) => {
     UPDATE meal_orders
     SET status = 'picked_up', picked_up_at = CURRENT_TIMESTAMP, picked_up_by = ?
     WHERE id = ? AND status = 'pending'
-  `).run(user.id, req.params.id);
+  `).run(user.id, Number(req.params.id));
 
   if (result.changes === 0) {
     return res.status(404).json({ error: '이미 처리되었거나 없는 주문입니다' });
