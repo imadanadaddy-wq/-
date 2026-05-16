@@ -97,7 +97,7 @@ ipcMain.on('window-hide',   () => overlayWin && overlayWin.hide());
 ipcMain.on('set-opacity',   (e, val) => overlayWin && overlayWin.setOpacity(val));
 
 ipcMain.handle('get-config', () => ({
-  apiUrl:   store.get('apiUrl',   'http://localhost:3000/api/bot-heartbeat/client'),
+  apiUrl:   store.get('apiUrl',   'https://hyeong.up.railway.app/api/bot-heartbeat/client'),
   interval: store.get('interval', 10000),
   opacity:  store.get('opacity',  93),
   // PC 관리용
