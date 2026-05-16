@@ -7,30 +7,35 @@
   const ROLE_KEY = 'knuh.role.v1';
   const POLL_MS = 15000;
 
+  // Meal types ordered breakfast first throughout the app
+  const MEAL_ORDER = ['breakfast', 'late_night'];
+
   // ===== State =====
   let user = null;          // {id, employee_id, name, is_admin}
   let role = null;          // 'applicant' | 'acting' | 'admin'
   let pollTimer = null;
 
   // Applicant
-  let appMealTab = 'late_night';
-  let selectedDates = [];   // ['YYYY-MM-DD', ...]
-  let selectedMenuName = ''; // chip selection
-  let customMenuText = '';   // free-text input
+  let applicantStep = 'home';      // 'home' | 'date' | 'menu' | 'done'
+  let draftMealType = null;        // chosen meal type during stepped flow
+  let draftDates = [];             // ['YYYY-MM-DD', ...]
+  let draftMenuName = '';
+  let draftCustomText = '';
+  let lastSubmitted = null;        // {meal_type, menu, dates, isUpdate}
   let myOrders = [];
 
   // Acting
   let actingStep = 'choose'; // 'choose' | 'list'
-  let actingMealType = null; // 'late_night' | 'breakfast'
-  let actingDate = null;     // 'YYYY-MM-DD'
+  let actingMealType = null;
+  let actingDate = null;
   let activeOrders = [];
-  let activeSummary = [];    // [{service_date, meal_type, n}]
+  let activeSummary = [];
 
   // Admin
-  let adminMealTab = 'late_night';
+  let adminMealTab = 'breakfast';
   let adminItems = [];
 
-  let menuItemsCache = { late_night: [], breakfast: [] };
+  let menuItemsCache = { breakfast: [], late_night: [] };
 
   // ===== Storage =====
   function loadStored() {
@@ -77,11 +82,8 @@
     toastTimer = setTimeout(() => toastEl.classList.remove('show'), 2200);
   }
 
-  // ===== Date helpers (local timezone) =====
-  function todayStr() {
-    const d = new Date();
-    return ymd(d);
-  }
+  // ===== Date helpers =====
+  function todayStr() { return ymd(new Date()); }
   function ymd(d) {
     const y = d.getFullYear();
     const m = String(d.getMonth() + 1).padStart(2, '0');
@@ -123,12 +125,22 @@
     }[c]));
   }
 
+  // Sort orders breakfast-first then by date
+  function sortOrders(list) {
+    return [...list].sort((a, b) => {
+      if (a.service_date !== b.service_date) return a.service_date < b.service_date ? -1 : 1;
+      const ai = MEAL_ORDER.indexOf(a.meal_type);
+      const bi = MEAL_ORDER.indexOf(b.meal_type);
+      return ai - bi;
+    });
+  }
+
   function renderBrand() {
     return `
       <div class="brand">
         <div>
           <div class="brand-logo">KNUH</div>
-          <div class="brand-sub">야식·조식 신청</div>
+          <div class="brand-sub">조식·야식 신청</div>
         </div>
         ${user ? `
           <div class="user-pill">
@@ -256,21 +268,24 @@
     `;
   }
 
-  // ===== APPLICANT =====
-  async function renderApplicant() {
-    const dates = nextNDays(7);
+  // ===== APPLICANT - Stepped flow =====
 
-    // Pre-fill selectedMenu from my pending order for this date+type if exactly one selected
-    let placeholderMenu = '';
-    let existingForSelection = null;
-    if (selectedDates.length === 1) {
-      existingForSelection = myOrders.find(o =>
-        o.service_date === selectedDates[0] && o.meal_type === appMealTab
-      );
-      if (existingForSelection) placeholderMenu = existingForSelection.menu;
-    }
+  function applicantHeader(title, opts = {}) {
+    // opts: { onBack: bool, step: 0..3 (0 = hidden), totalSteps: 3 }
+    const showStep = typeof opts.step === 'number' && opts.step > 0;
+    return `
+      <div class="step-top">
+        ${opts.onBack ? `<button class="icon-btn" id="stepBack" aria-label="뒤로">‹</button>`
+                     : `<button class="icon-btn" id="stepClose" aria-label="홈으로">✕</button>`}
+        <div class="step-title">${escape(title)}</div>
+        ${showStep ? `<div class="step-indicator">${opts.step}/${opts.totalSteps || 3}</div>`
+                  : `<div class="step-indicator-spacer"></div>`}
+      </div>
+    `;
+  }
 
-    const items = menuItemsCache[appMealTab] || [];
+  function renderApplicantHome() {
+    const sorted = sortOrders(myOrders);
 
     root.innerHTML = `
       ${renderBrand()}
@@ -278,141 +293,75 @@
         <h1>메뉴 신청</h1>
         <button class="btn btn-ghost btn-sm" id="switchRole">역할 전환</button>
       </div>
-      <p style="margin:4px 4px 16px;color:var(--muted);font-size:13px;">
-        식사 종류 → 날짜 → 메뉴 순으로 선택해주세요. 여러 날짜를 동시에 신청할 수 있어요.
-      </p>
 
-      <div class="tabs">
-        <button class="tab ${appMealTab==='late_night'?'active':''}" data-tab="late_night">🍜 야식</button>
-        <button class="tab ${appMealTab==='breakfast'?'active':''}" data-tab="breakfast">🍳 조식</button>
-      </div>
-
-      <div class="section-title">
-        <h2>날짜 선택</h2>
-        <span class="hint">${selectedDates.length}일 선택됨</span>
-      </div>
-
-      <div class="date-quick">
-        <button data-quick="today">오늘</button>
-        <button data-quick="tomorrow">내일</button>
-        <button data-quick="3">앞으로 3일</button>
-        <button data-quick="clear">초기화</button>
-      </div>
-
-      ${renderDateChips(dates, selectedDates,
-        new Set(myOrders.filter(o => o.meal_type === appMealTab).map(o => o.service_date)))}
-
-      <div class="section-title">
-        <h2>메뉴 선택</h2>
-        ${items.length ? `<span class="hint">탭해서 선택</span>` : ''}
-      </div>
-
-      ${items.length === 0 ? `
-        <div class="empty" style="margin-bottom:14px;">
-          <span class="empty-emoji">📭</span>
-          등록된 메뉴가 없습니다. 직접 입력으로 신청해주세요.
+      ${sorted.length === 0 ? `
+        <p style="margin:8px 4px 18px;color:var(--muted);font-size:13px;">
+          어떤 식사를 신청하시겠어요?
+        </p>
+        <div class="choice-grid">
+          <button class="choice-card breakfast" data-meal="breakfast">
+            <span class="emoji">🍳</span>
+            <span class="name">조식</span>
+            <span class="count">아침 식사</span>
+          </button>
+          <button class="choice-card late_night" data-meal="late_night">
+            <span class="emoji">🍜</span>
+            <span class="name">야식</span>
+            <span class="count">밤 야식</span>
+          </button>
         </div>
       ` : `
-        <div class="menu-grid">
-          ${items.map(it => `
-            <button class="menu-chip ${selectedMenuName===it.name?'selected':''}" data-menu="${escape(it.name)}">
-              ${escape(it.name)}
-            </button>
+        <div class="section-title" style="margin-top:14px;">
+          <h2>내 신청 현황</h2>
+          <span class="hint">탭하면 바코드 · ${sorted.length}건</span>
+        </div>
+        <div class="my-orders-list">
+          ${sorted.map((o, i) => `
+            <div class="my-order-row">
+              <button class="my-order-main" data-view-idx="${i}">
+                <div class="meal-badge ${o.meal_type}">${mealEmoji(o.meal_type)}</div>
+                <div class="info">
+                  <div class="date">${fmtFull(o.service_date)} · ${mealLabel(o.meal_type)}</div>
+                  <div class="menu">${escape(o.menu)}</div>
+                </div>
+                <span class="view-hint">바코드 ›</span>
+              </button>
+              <button class="x" data-cancel-id="${o.id}" title="취소">✕</button>
+            </div>
           `).join('')}
         </div>
+
+        <div style="margin-top:18px;">
+          <div class="add-meal-row">
+            <button class="btn btn-primary add-half breakfast-btn" data-meal="breakfast">
+              <span style="font-size:18px;">🍳</span> 조식 신청
+            </button>
+            <button class="btn btn-primary add-half late_night-btn" data-meal="late_night">
+              <span style="font-size:18px;">🍜</span> 야식 신청
+            </button>
+          </div>
+        </div>
       `}
-
-      <div class="field">
-        <label for="menuInput">직접 입력 (선택)</label>
-        <textarea class="textarea" id="menuInput" maxlength="200"
-          placeholder="예: 컵라면, 안 매운걸로 / 죽 (전복죽 선호)">${escape(customMenuText || (selectedMenuName ? '' : placeholderMenu))}</textarea>
-      </div>
-
-      <button class="btn btn-primary" id="submitBtn"
-        ${selectedDates.length === 0 ? 'disabled' : ''}>
-        ${selectedDates.length === 0 ? '날짜를 선택해주세요'
-          : selectedDates.length === 1 && existingForSelection ? '수정하기'
-          : `${selectedDates.length}일 신청하기`}
-      </button>
-
-      ${renderMyOrdersSummary()}
     `;
-
-    document.querySelectorAll('.tab').forEach(t =>
-      t.addEventListener('click', () => {
-        appMealTab = t.dataset.tab;
-        selectedMenuName = '';
-        customMenuText = '';
-        renderApplicant();
-      }));
 
     $('#switchRole').addEventListener('click', () => { saveRole(null); render(); });
 
-    // Date chips
-    document.querySelectorAll('[data-date]').forEach(b =>
+    document.querySelectorAll('[data-meal]').forEach(b =>
       b.addEventListener('click', () => {
-        const d = b.dataset.date;
-        const i = selectedDates.indexOf(d);
-        if (i >= 0) selectedDates.splice(i, 1);
-        else selectedDates.push(d);
-        selectedDates.sort();
-        renderApplicant();
+        draftMealType = b.dataset.meal;
+        draftDates = [todayStr()];
+        draftMenuName = '';
+        draftCustomText = '';
+        applicantStep = 'date';
+        renderApplicantStep();
       }));
 
-    // Quick date buttons
-    document.querySelectorAll('[data-quick]').forEach(b =>
+    document.querySelectorAll('[data-view-idx]').forEach(b =>
       b.addEventListener('click', () => {
-        const q = b.dataset.quick;
-        if (q === 'today') selectedDates = [todayStr()];
-        else if (q === 'tomorrow') selectedDates = [addDays(todayStr(), 1)];
-        else if (q === '3') selectedDates = nextNDays(3);
-        else if (q === 'clear') selectedDates = [];
-        renderApplicant();
+        const i = Number(b.dataset.viewIdx);
+        openOrderViewer(sortOrders(myOrders), i, { allowPickup: false });
       }));
 
-    // Menu chips
-    document.querySelectorAll('[data-menu]').forEach(b =>
-      b.addEventListener('click', () => {
-        selectedMenuName = b.dataset.menu;
-        customMenuText = '';
-        renderApplicant();
-      }));
-
-    // Custom input - track typing
-    const ta = $('#menuInput');
-    ta.addEventListener('input', () => {
-      customMenuText = ta.value;
-      if (customMenuText && selectedMenuName) {
-        // user typed → unselect chip
-        selectedMenuName = '';
-        // re-render only if needed - avoid losing focus, just update chip styles
-        document.querySelectorAll('.menu-chip.selected').forEach(c => c.classList.remove('selected'));
-      }
-    });
-
-    // Submit
-    $('#submitBtn').addEventListener('click', async () => {
-      if (selectedDates.length === 0) return;
-      const menu = (customMenuText || $('#menuInput').value || '').trim() || selectedMenuName;
-      if (!menu) { toast('메뉴를 선택하거나 입력해주세요'); return; }
-
-      try {
-        const r = await api('/api/orders/batch', {
-          method: 'POST',
-          body: JSON.stringify({ meal_type: appMealTab, menu, dates: selectedDates })
-        });
-        const msgs = [];
-        if (r.created.length) msgs.push(`${r.created.length}일 신청`);
-        if (r.updated.length) msgs.push(`${r.updated.length}일 수정`);
-        toast(msgs.join(' · ') || '완료');
-        selectedMenuName = '';
-        customMenuText = '';
-        await loadMyOrders();
-        renderApplicant();
-      } catch (e) { toast(e.message); }
-    });
-
-    // Cancel buttons in summary
     document.querySelectorAll('[data-cancel-id]').forEach(b =>
       b.addEventListener('click', async (e) => {
         e.stopPropagation();
@@ -421,41 +370,240 @@
           await api(`/api/orders/${b.dataset.cancelId}`, { method: 'DELETE' });
           toast('취소되었습니다');
           await loadMyOrders();
-          renderApplicant();
+          renderApplicantHome();
         } catch (e) { toast(e.message); }
-      }));
-
-    // Click on a my-order row → open barcode viewer (for self-pickup)
-    document.querySelectorAll('[data-view-idx]').forEach(b =>
-      b.addEventListener('click', () => {
-        const i = Number(b.dataset.viewIdx);
-        openOrderViewer(myOrders, i, { allowPickup: false });
       }));
   }
 
-  function renderMyOrdersSummary() {
-    if (myOrders.length === 0) return '';
-    return `
-      <div class="section-title">
-        <h2>내 신청 목록</h2>
-        <span class="hint">탭하면 바코드 · ${myOrders.length}건</span>
+  function renderApplicantStep() {
+    if (applicantStep === 'date') renderApplicantDate();
+    else if (applicantStep === 'menu') renderApplicantMenu();
+    else if (applicantStep === 'done') renderApplicantDone();
+    else renderApplicantHome();
+  }
+
+  function renderApplicantDate() {
+    const dates = nextNDays(7);
+    const existing = new Set(
+      myOrders.filter(o => o.meal_type === draftMealType).map(o => o.service_date)
+    );
+
+    root.innerHTML = `
+      ${renderBrand()}
+      ${applicantHeader(`${mealEmoji(draftMealType)} ${mealLabel(draftMealType)} 신청`, { onBack: true, step: 1, totalSteps: 3 })}
+
+      <div class="card step-card">
+        <h2 class="step-h">날짜 선택</h2>
+        <p class="step-desc">여러 날짜를 한번에 선택할 수 있어요. 이미 신청한 날은 점으로 표시됩니다.</p>
+
+        <div class="date-quick">
+          <button data-quick="today">오늘</button>
+          <button data-quick="tomorrow">내일</button>
+          <button data-quick="3">앞으로 3일</button>
+          <button data-quick="clear">초기화</button>
+        </div>
+
+        ${renderDateChips(dates, draftDates, existing)}
       </div>
-      <div class="my-orders-list">
-        ${myOrders.map((o, i) => `
-          <div class="my-order-row">
-            <button class="my-order-main" data-view-idx="${i}">
-              <div class="meal-badge ${o.meal_type}">${mealEmoji(o.meal_type)}</div>
-              <div class="info">
-                <div class="date">${fmtFull(o.service_date)} · ${mealLabel(o.meal_type)}</div>
-                <div class="menu">${escape(o.menu)}</div>
-              </div>
-              <span class="view-hint">바코드 ›</span>
-            </button>
-            <button class="x" data-cancel-id="${o.id}" title="취소">✕</button>
-          </div>
-        `).join('')}
+
+      <div class="step-action">
+        <button class="btn btn-primary" id="stepNext" ${draftDates.length === 0 ? 'disabled' : ''}>
+          ${draftDates.length === 0 ? '날짜를 선택해주세요'
+            : `${draftDates.length}일 선택 · 다음으로`}
+        </button>
       </div>
     `;
+
+    $('#stepBack').addEventListener('click', goHome);
+
+    document.querySelectorAll('[data-date]').forEach(b =>
+      b.addEventListener('click', () => {
+        const d = b.dataset.date;
+        const i = draftDates.indexOf(d);
+        if (i >= 0) draftDates.splice(i, 1);
+        else draftDates.push(d);
+        draftDates.sort();
+        renderApplicantDate();
+      }));
+
+    document.querySelectorAll('[data-quick]').forEach(b =>
+      b.addEventListener('click', () => {
+        const q = b.dataset.quick;
+        if (q === 'today') draftDates = [todayStr()];
+        else if (q === 'tomorrow') draftDates = [addDays(todayStr(), 1)];
+        else if (q === '3') draftDates = nextNDays(3);
+        else if (q === 'clear') draftDates = [];
+        renderApplicantDate();
+      }));
+
+    $('#stepNext').addEventListener('click', () => {
+      if (draftDates.length === 0) return;
+      // If single date and existing order present, pre-fill menu
+      if (draftDates.length === 1) {
+        const ex = myOrders.find(o => o.service_date === draftDates[0] && o.meal_type === draftMealType);
+        if (ex) draftCustomText = ex.menu;
+      }
+      applicantStep = 'menu';
+      renderApplicantStep();
+    });
+  }
+
+  function renderApplicantMenu() {
+    const items = menuItemsCache[draftMealType] || [];
+    const dateLabel = draftDates.length === 1
+      ? fmtFull(draftDates[0])
+      : `${draftDates.length}일 (${draftDates.map(d => fmtDate(d, { withDow: false })).join(', ')})`;
+
+    root.innerHTML = `
+      ${renderBrand()}
+      ${applicantHeader(`${mealEmoji(draftMealType)} ${mealLabel(draftMealType)} 신청`, { onBack: true, step: 2, totalSteps: 3 })}
+
+      <div class="card step-card">
+        <h2 class="step-h">메뉴 선택</h2>
+        <p class="step-desc">${escape(dateLabel)}</p>
+
+        ${items.length === 0 ? `
+          <div class="empty" style="margin-top:8px;">
+            <span class="empty-emoji">📭</span>
+            등록된 메뉴가 없습니다. 직접 입력으로 신청해주세요.
+          </div>
+        ` : `
+          <div class="menu-grid">
+            ${items.map(it => `
+              <button class="menu-chip ${draftMenuName===it.name?'selected':''}" data-menu="${escape(it.name)}">
+                ${escape(it.name)}
+              </button>
+            `).join('')}
+          </div>
+        `}
+
+        <div class="field" style="margin-top:14px;margin-bottom:0;">
+          <label for="menuInput">직접 입력 (선택)</label>
+          <textarea class="textarea" id="menuInput" maxlength="200"
+            placeholder="예: 컵라면, 안 매운걸로 / 죽 (전복죽 선호)">${escape(draftCustomText)}</textarea>
+        </div>
+      </div>
+
+      <div class="step-action">
+        <button class="btn btn-primary" id="stepSubmit">
+          ${draftDates.length === 1 ? '신청하기' : `${draftDates.length}일 신청하기`}
+        </button>
+      </div>
+    `;
+
+    $('#stepBack').addEventListener('click', () => {
+      applicantStep = 'date';
+      renderApplicantStep();
+    });
+
+    document.querySelectorAll('[data-menu]').forEach(b =>
+      b.addEventListener('click', () => {
+        draftMenuName = b.dataset.menu;
+        draftCustomText = '';
+        renderApplicantMenu();
+      }));
+
+    const ta = $('#menuInput');
+    ta.addEventListener('input', () => {
+      draftCustomText = ta.value;
+      if (draftCustomText && draftMenuName) {
+        draftMenuName = '';
+        document.querySelectorAll('.menu-chip.selected').forEach(c => c.classList.remove('selected'));
+      }
+    });
+
+    $('#stepSubmit').addEventListener('click', async () => {
+      const menu = (draftCustomText || ta.value || '').trim() || draftMenuName;
+      if (!menu) { toast('메뉴를 선택하거나 입력해주세요'); return; }
+
+      const btn = $('#stepSubmit');
+      btn.disabled = true; btn.textContent = '신청 중...';
+
+      try {
+        const r = await api('/api/orders/batch', {
+          method: 'POST',
+          body: JSON.stringify({ meal_type: draftMealType, menu, dates: draftDates })
+        });
+        lastSubmitted = {
+          meal_type: draftMealType,
+          menu,
+          dates: [...draftDates],
+          created: r.created,
+          updated: r.updated,
+        };
+        await loadMyOrders();
+        applicantStep = 'done';
+        renderApplicantStep();
+      } catch (e) {
+        toast(e.message);
+        btn.disabled = false;
+        btn.textContent = draftDates.length === 1 ? '신청하기' : `${draftDates.length}일 신청하기`;
+      }
+    });
+  }
+
+  function renderApplicantDone() {
+    if (!lastSubmitted) { goHome(); return; }
+    const { meal_type, menu, dates, created, updated } = lastSubmitted;
+    const summaryText = [
+      created.length ? `${created.length}일 신청` : '',
+      updated.length ? `${updated.length}일 수정` : '',
+    ].filter(Boolean).join(' · ');
+
+    // Sort dates breakfast-first ordering applies elsewhere; here just sort dates ascending
+    const sortedDates = [...dates].sort();
+
+    root.innerHTML = `
+      ${renderBrand()}
+      ${applicantHeader('신청 완료', { onBack: false, step: 3, totalSteps: 3 })}
+
+      <div class="card step-card done-card">
+        <div class="done-emoji">✅</div>
+        <h2 class="done-h">${escape(summaryText || '신청 완료')}</h2>
+        <p class="step-desc" style="text-align:center;">
+          ${mealEmoji(meal_type)} ${mealLabel(meal_type)} · ${escape(menu)}
+        </p>
+        <ul class="done-dates">
+          ${sortedDates.map(d => `<li>${fmtFull(d)}</li>`).join('')}
+        </ul>
+        <div class="done-actions">
+          <button class="btn" id="doneViewBarcode">📱 내 바코드 보기</button>
+          <button class="btn btn-primary" id="doneHome">홈으로</button>
+        </div>
+        <p class="muted-note" style="text-align:center;margin-top:10px;">
+          현황은 언제든 홈에서 다시 볼 수 있어요.
+        </p>
+      </div>
+    `;
+
+    $('#stepClose').addEventListener('click', goHome);
+    $('#doneHome').addEventListener('click', goHome);
+    $('#doneViewBarcode').addEventListener('click', () => {
+      // Open viewer focused on the first date of this submission
+      const sorted = sortOrders(myOrders);
+      const target = sorted.findIndex(o =>
+        o.meal_type === meal_type && sortedDates.includes(o.service_date)
+      );
+      if (target >= 0) {
+        openOrderViewer(sorted, target, { allowPickup: false });
+      } else {
+        toast('바코드를 표시할 신청이 없습니다');
+      }
+    });
+  }
+
+  function goHome() {
+    applicantStep = 'home';
+    draftMealType = null;
+    draftDates = [];
+    draftMenuName = '';
+    draftCustomText = '';
+    renderApplicantHome();
+  }
+
+  function renderApplicant() {
+    if (applicantStep === 'home') renderApplicantHome();
+    else renderApplicantStep();
   }
 
   // ===== ACTING =====
@@ -478,15 +626,15 @@
         먼저 어떤 식사를 보러 가실지 선택하세요.
       </p>
       <div class="choice-grid">
-        <button class="choice-card late_night" data-meal="late_night">
-          <span class="emoji">🍜</span>
-          <span class="name">야식</span>
-          <span class="count">오늘 ${countFor('late_night', today)} · 내일 ${countFor('late_night', tomorrow)} · 전체 ${totalFor('late_night')}</span>
-        </button>
         <button class="choice-card breakfast" data-meal="breakfast">
           <span class="emoji">🍳</span>
           <span class="name">조식</span>
           <span class="count">오늘 ${countFor('breakfast', today)} · 내일 ${countFor('breakfast', tomorrow)} · 전체 ${totalFor('breakfast')}</span>
+        </button>
+        <button class="choice-card late_night" data-meal="late_night">
+          <span class="emoji">🍜</span>
+          <span class="name">야식</span>
+          <span class="count">오늘 ${countFor('late_night', today)} · 내일 ${countFor('late_night', tomorrow)} · 전체 ${totalFor('late_night')}</span>
         </button>
       </div>
     `;
@@ -551,10 +699,7 @@
       </div>
     `;
 
-    $('#backBtn').addEventListener('click', () => {
-      actingStep = 'choose';
-      render();
-    });
+    $('#backBtn').addEventListener('click', () => { actingStep = 'choose'; render(); });
     $('#switchRole').addEventListener('click', () => { saveRole(null); render(); });
 
     document.querySelectorAll('[data-date]').forEach(b =>
@@ -585,7 +730,7 @@
     else renderActingList();
   }
 
-  // ===== Order viewer (swipeable, used by both acting & applicant) =====
+  // ===== Order viewer (swipeable, used by acting & applicant) =====
   function openOrderViewer(initialOrders, startIndex = 0, opts = {}) {
     if (!initialOrders || initialOrders.length === 0) {
       toast('표시할 항목이 없습니다');
@@ -652,7 +797,6 @@
       content.innerHTML = '';
       content.appendChild(card);
 
-      // Barcode
       try {
         JsBarcode(card.querySelector('.barcode-svg'), String(order.employee_id || user.employee_id), {
           format: 'CODE128', displayValue: true, fontSize: 16,
@@ -660,7 +804,6 @@
         });
       } catch (e) { console.error('barcode error', e); }
 
-      // Indicator
       countEl.textContent = orders.length > 1 ? `${idx + 1} / ${orders.length}` : '';
       prevBtn.style.visibility = orders.length > 1 ? 'visible' : 'hidden';
       nextBtn.style.visibility = orders.length > 1 ? 'visible' : 'hidden';
@@ -672,7 +815,6 @@
       if (dir < 0 && idx > 0) { idx--; renderCard(-1); }
       else if (dir > 0 && idx < orders.length - 1) { idx++; renderCard(1); }
       else {
-        // bounce: brief shake on edge
         const card = content.firstElementChild;
         if (card) {
           card.style.transition = 'transform .12s';
@@ -693,9 +835,8 @@
         dataChanged = true;
         orders.splice(idx, 1);
         if (orders.length === 0) { close(); return; }
-        // stay at same index (which now points to the next item), or last if past end
         if (idx >= orders.length) idx = orders.length - 1;
-        renderCard(1); // slide as if going forward
+        renderCard(1);
       } catch (e) {
         toast(e.message);
         if (btn) { btn.disabled = false; btn.textContent = '수령 완료 · 다음'; }
@@ -755,7 +896,6 @@
       dragX = dx;
       const card = content.firstElementChild;
       if (card) {
-        // resistance at edges
         let applied = dx;
         if ((idx === 0 && dx > 0) || (idx === orders.length - 1 && dx < 0)) {
           applied = dx * 0.3;
@@ -767,25 +907,17 @@
     }, { passive: true });
 
     content.addEventListener('touchend', () => {
-      if (startX === null) { return; }
+      if (startX === null) return;
       const card = content.firstElementChild;
       if (!isDragging) { startX = null; return; }
       isDragging = false;
-
       const moved = dragX;
       startX = null; startY = null; dragX = 0;
-
       if (card) {
         card.style.transition = '';
-        if (moved < -SWIPE_THRESHOLD && idx < orders.length - 1) {
-          go(1);
-        } else if (moved > SWIPE_THRESHOLD && idx > 0) {
-          go(-1);
-        } else {
-          // snap back
-          card.style.transform = '';
-          card.style.opacity = '';
-        }
+        if (moved < -SWIPE_THRESHOLD && idx < orders.length - 1) go(1);
+        else if (moved > SWIPE_THRESHOLD && idx > 0) go(-1);
+        else { card.style.transform = ''; card.style.opacity = ''; }
       }
     });
 
@@ -808,8 +940,8 @@
       </p>
 
       <div class="tabs">
-        <button class="tab ${adminMealTab==='late_night'?'active':''}" data-tab="late_night">🍜 야식 메뉴</button>
         <button class="tab ${adminMealTab==='breakfast'?'active':''}" data-tab="breakfast">🍳 조식 메뉴</button>
+        <button class="tab ${adminMealTab==='late_night'?'active':''}" data-tab="late_night">🍜 야식 메뉴</button>
       </div>
 
       <div class="section-title">
@@ -908,16 +1040,15 @@
   async function loadMenuItems() {
     try {
       const items = await api('/api/menu-items');
-      menuItemsCache = { late_night: [], breakfast: [] };
+      menuItemsCache = { breakfast: [], late_night: [] };
       for (const it of items) {
         if (menuItemsCache[it.meal_type]) menuItemsCache[it.meal_type].push(it);
       }
-    } catch { menuItemsCache = { late_night: [], breakfast: [] }; }
+    } catch { menuItemsCache = { breakfast: [], late_night: [] }; }
   }
   async function loadAdminItems() {
-    try {
-      adminItems = await api('/api/menu-items?include_inactive=1');
-    } catch { adminItems = []; }
+    try { adminItems = await api('/api/menu-items?include_inactive=1'); }
+    catch { adminItems = []; }
   }
 
   // ===== Polling =====
@@ -934,8 +1065,11 @@
             renderActing();
           }
         } else if (role === 'applicant') {
-          await loadMyOrders();
-          if (document.activeElement?.id !== 'menuInput') renderApplicant();
+          // Only refresh home view automatically; in the middle of a step, don't disturb
+          if (applicantStep === 'home') {
+            await loadMyOrders();
+            renderApplicantHome();
+          }
         }
       } catch {}
     }, POLL_MS);
@@ -949,7 +1083,6 @@
     stopPolling();
     if (!user) { renderLogin(); return; }
 
-    // Validate user on backend
     try {
       const fresh = await api('/api/me');
       saveUser(fresh);
@@ -966,13 +1099,11 @@
       }
     }
 
-    // Guard against non-admin user with stale 'admin' role
     if (role === 'admin' && !user.is_admin) saveRole(null);
 
     if (!role) { renderRolePicker(); return; }
 
     if (role === 'applicant') {
-      if (selectedDates.length === 0) selectedDates = [todayStr()];
       await Promise.all([loadMyOrders(), loadMenuItems()]);
       renderApplicant();
       startPolling();
