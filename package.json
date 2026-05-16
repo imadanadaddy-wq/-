@@ -1,16 +1,20 @@
 {
-  "name": "knuh-meal-dashboard",
-  "version": "1.0.0",
-  "description": "KNUH 야식/조식 신청 대시보드",
+  "name": "hyeong-maple-unified",
+  "version": "1.2.0",
+  "description": "Hyeong Maple Unified Dashboard (MesoBo + FrenzyCast) + Desktop Overlay",
   "main": "server.js",
   "scripts": {
-    "start": "node --no-warnings server.js",
-    "dev": "node --no-warnings --watch server.js"
+    "start": "node server.js",
+    "overlay": "cd electron && npm install && npm start"
   },
   "dependencies": {
-    "express": "^4.21.1"
+    "cookie-parser": "^1.4.6",
+    "cors": "^2.8.5",
+    "express": "^4.18.2",
+    "jsonwebtoken": "^9.0.2",
+    "sql.js": "^1.10.2"
   },
   "engines": {
-    "node": ">=22.13.0"
+    "node": ">=18.0.0"
   }
 }

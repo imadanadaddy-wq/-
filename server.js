@@ -1,444 +1,324 @@
-// KNUH Meal Dashboard - Express + SQLite backend
-// Uses Node's built-in node:sqlite (Node 22.13+) to avoid native compilation.
-const express = require('express');
-const path = require('path');
-const fs = require('fs');
-const { DatabaseSync } = require('node:sqlite');
+const express      = require("express");
+const cors         = require("cors");
+const path         = require("path");
+const fs           = require("fs");
+const cookieParser = require("cookie-parser");
+const jwt          = require("jsonwebtoken");
+const dbMod        = require("./db");
 
-const app = express();
+const app  = express();
 const PORT = process.env.PORT || 3000;
 
-// Admins: hard-coded for now. Add more employee_ids to this set as needed.
-const ADMIN_EMPLOYEE_IDS = new Set(['22807']);
-const isAdmin = (user) => user && ADMIN_EMPLOYEE_IDS.has(user.employee_id);
+// ★★★ Railway/Heroku 등 reverse proxy 뒤에서 동작 시 필수 ★★★
+// 이걸 안 켜면: req.secure가 항상 false → Secure 쿠키가 정상 동작 안할 수 있음
+app.set('trust proxy', 1);
 
-// DB path: configurable so Railway Volume can mount /data
-const DB_PATH = process.env.DATABASE_PATH || path.join(__dirname, 'data', 'knuh.db');
-fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
+// ══════════════════════════════════════
+// ENV CONFIG
+// ══════════════════════════════════════
+const DISCORD_CLIENT_ID     = process.env.DISCORD_CLIENT_ID     || "";
+const DISCORD_CLIENT_SECRET = process.env.DISCORD_CLIENT_SECRET || "";
+const DISCORD_REDIRECT_URI  = process.env.DISCORD_REDIRECT_URI  || `http://localhost:${PORT}/auth/callback`;
+const JWT_SECRET            = process.env.JWT_SECRET            || "change-this-secret-in-production";
+const ALLOWED_USER_IDS = (process.env.ALLOWED_USER_IDS || "")
+  .split(",").map(s => s.trim()).filter(Boolean);
 
-const db = new DatabaseSync(DB_PATH);
-db.exec('PRAGMA journal_mode = WAL');
-db.exec('PRAGMA foreign_keys = ON');
-
-// Schema
-db.exec(`
-  CREATE TABLE IF NOT EXISTS users (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    employee_id TEXT UNIQUE NOT NULL,
-    name TEXT NOT NULL,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-  );
-
-  CREATE TABLE IF NOT EXISTS meal_orders (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER NOT NULL,
-    meal_type TEXT NOT NULL,
-    menu TEXT NOT NULL,
-    service_date DATE NOT NULL DEFAULT (date('now', 'localtime')),
-    status TEXT DEFAULT 'pending',
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    picked_up_at DATETIME,
-    picked_up_by INTEGER,
-    FOREIGN KEY (user_id) REFERENCES users(id),
-    FOREIGN KEY (picked_up_by) REFERENCES users(id)
-  );
-
-  CREATE TABLE IF NOT EXISTS menu_items (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    meal_type TEXT NOT NULL,
-    name TEXT NOT NULL,
-    sort_order INTEGER NOT NULL DEFAULT 0,
-    active INTEGER NOT NULL DEFAULT 1,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-  );
-
-  CREATE INDEX IF NOT EXISTS idx_orders_status ON meal_orders(status);
-  CREATE INDEX IF NOT EXISTS idx_orders_date ON meal_orders(service_date, meal_type, status);
-  CREATE INDEX IF NOT EXISTS idx_menu_items_meal ON menu_items(meal_type, active, sort_order);
-`);
-
-// Migration: add service_date column to existing meal_orders if missing
-(function migrate() {
-  const cols = db.prepare("PRAGMA table_info(meal_orders)").all();
-  if (!cols.some(c => c.name === 'service_date')) {
-    console.log('[migration] adding service_date column');
-    db.exec("ALTER TABLE meal_orders ADD COLUMN service_date DATE");
-    db.exec("UPDATE meal_orders SET service_date = date(created_at, 'localtime') WHERE service_date IS NULL");
-  }
-})();
-
-// Partial unique index: one pending order per (user, date, meal_type)
-db.exec(`
-  CREATE UNIQUE INDEX IF NOT EXISTS idx_orders_unique_pending
-    ON meal_orders(user_id, service_date, meal_type)
-    WHERE status = 'pending';
-`);
-
-// Seed default menu items if table is empty
-(function seedMenu() {
-  const count = db.prepare('SELECT COUNT(*) AS n FROM menu_items').get().n;
-  if (count > 0) return;
-  console.log('[seed] populating default menu items');
-  const seeds = {
-    late_night: ['컵라면', '김밥', '햄버거', '죽', '샌드위치', '라면'],
-    breakfast: ['빵+우유', '죽', '주먹밥', '시리얼', '샌드위치', '토스트'],
-  };
-  const ins = db.prepare('INSERT INTO menu_items (meal_type, name, sort_order) VALUES (?, ?, ?)');
-  for (const [meal_type, items] of Object.entries(seeds)) {
-    items.forEach((name, i) => ins.run(meal_type, name, i));
-  }
-})();
-
-app.use(express.json());
-app.use(express.static(path.join(__dirname, 'public')));
-
-// --- Helpers ---
-function getUserByEmployeeId(employee_id) {
-  return db.prepare('SELECT * FROM users WHERE employee_id = ?').get(employee_id);
+if (!DISCORD_CLIENT_ID || !DISCORD_CLIENT_SECRET) {
+  console.warn("[AUTH] ⚠  DISCORD_CLIENT_ID / DISCORD_CLIENT_SECRET 환경변수가 없습니다.");
 }
-
-function requireUser(req, res) {
-  const employee_id = req.headers['x-employee-id'] || req.query.employee_id || req.body?.employee_id;
-  if (!employee_id) {
-    res.status(401).json({ error: '로그인이 필요합니다' });
-    return null;
-  }
-  const user = getUserByEmployeeId(String(employee_id));
-  if (!user) {
-    res.status(401).json({ error: '등록되지 않은 사용자입니다' });
-    return null;
-  }
-  return user;
+if (ALLOWED_USER_IDS.length === 0) {
+  console.warn("[AUTH] ⚠  ALLOWED_USER_IDS가 비어있습니다. 아무도 로그인할 수 없습니다.");
 }
+console.log(`[AUTH] CLIENT_ID set: ${!!DISCORD_CLIENT_ID}, REDIRECT_URI: ${DISCORD_REDIRECT_URI}, ALLOWED count: ${ALLOWED_USER_IDS.length}`);
 
-function requireAdmin(req, res) {
-  const user = requireUser(req, res);
-  if (!user) return null;
-  if (!isAdmin(user)) {
-    res.status(403).json({ error: '관리자 권한이 필요합니다' });
-    return null;
-  }
-  return user;
-}
+// ══════════════════════════════════════
+// MIDDLEWARE
+// ══════════════════════════════════════
+app.use(cors());
+app.use(express.json({ limit: "50mb" }));
+app.use(cookieParser());
 
-const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
-function validDate(s) {
-  if (!DATE_RE.test(s)) return false;
-  const d = new Date(s + 'T00:00:00');
-  return !isNaN(d.getTime());
-}
-
-// --- Auth / User ---
-
-app.post('/api/register', (req, res) => {
-  let { employee_id, name } = req.body || {};
-  employee_id = String(employee_id || '').trim();
-  name = String(name || '').trim();
-
-  if (!/^\d{3,10}$/.test(employee_id)) {
-    return res.status(400).json({ error: '사번은 숫자만 입력해주세요' });
-  }
-  if (!name) {
-    return res.status(400).json({ error: '이름을 입력해주세요' });
-  }
-
-  const existing = getUserByEmployeeId(employee_id);
-  if (existing) {
-    if (existing.name !== name) {
-      db.prepare('UPDATE users SET name = ? WHERE id = ?').run(name, existing.id);
-      existing.name = name;
-    }
-    return res.json({ ...existing, is_admin: isAdmin(existing) });
-  }
-
-  const result = db.prepare('INSERT INTO users (employee_id, name) VALUES (?, ?)').run(employee_id, name);
-  const user = db.prepare('SELECT * FROM users WHERE id = ?').get(Number(result.lastInsertRowid));
-  res.json({ ...user, is_admin: isAdmin(user) });
-});
-
-app.get('/api/me', (req, res) => {
-  const user = requireUser(req, res);
-  if (!user) return;
-  res.json({ ...user, is_admin: isAdmin(user) });
-});
-
-// --- Menu items ---
-
-app.get('/api/menu-items', (req, res) => {
-  const user = requireUser(req, res);
-  if (!user) return;
-  const { meal_type, include_inactive } = req.query;
-  let sql = 'SELECT * FROM menu_items';
-  const params = [];
-  const conds = [];
-  if (meal_type) { conds.push('meal_type = ?'); params.push(meal_type); }
-  if (!include_inactive) { conds.push('active = 1'); }
-  if (conds.length) sql += ' WHERE ' + conds.join(' AND ');
-  sql += ' ORDER BY meal_type, sort_order, id';
-  res.json(db.prepare(sql).all(...params));
-});
-
-app.post('/api/menu-items', (req, res) => {
-  const user = requireAdmin(req, res);
-  if (!user) return;
-
-  let { meal_type, name } = req.body || {};
-  name = String(name || '').trim();
-
-  if (!['breakfast', 'late_night'].includes(meal_type)) {
-    return res.status(400).json({ error: '잘못된 식사 유형입니다' });
-  }
-  if (!name) return res.status(400).json({ error: '메뉴 이름을 입력해주세요' });
-  if (name.length > 50) return res.status(400).json({ error: '메뉴 이름이 너무 깁니다 (50자 이하)' });
-
-  const dup = db.prepare(`
-    SELECT * FROM menu_items WHERE meal_type = ? AND name = ? AND active = 1
-  `).get(meal_type, name);
-  if (dup) return res.status(409).json({ error: '이미 같은 이름의 메뉴가 있습니다' });
-
-  const maxOrder = db.prepare('SELECT COALESCE(MAX(sort_order), -1) AS m FROM menu_items WHERE meal_type = ?').get(meal_type).m;
-  const result = db.prepare(`
-    INSERT INTO menu_items (meal_type, name, sort_order) VALUES (?, ?, ?)
-  `).run(meal_type, name, maxOrder + 1);
-
-  res.json(db.prepare('SELECT * FROM menu_items WHERE id = ?').get(Number(result.lastInsertRowid)));
-});
-
-app.patch('/api/menu-items/:id', (req, res) => {
-  const user = requireAdmin(req, res);
-  if (!user) return;
-
-  const id = Number(req.params.id);
-  const item = db.prepare('SELECT * FROM menu_items WHERE id = ?').get(id);
-  if (!item) return res.status(404).json({ error: '메뉴를 찾을 수 없습니다' });
-
-  const updates = [];
-  const params = [];
-  if (typeof req.body?.name === 'string') {
-    const name = req.body.name.trim();
-    if (!name || name.length > 50) return res.status(400).json({ error: '메뉴 이름이 올바르지 않습니다' });
-    updates.push('name = ?'); params.push(name);
-  }
-  if (typeof req.body?.active === 'boolean') {
-    updates.push('active = ?'); params.push(req.body.active ? 1 : 0);
-  }
-  if (typeof req.body?.sort_order === 'number') {
-    updates.push('sort_order = ?'); params.push(req.body.sort_order);
-  }
-  if (!updates.length) return res.status(400).json({ error: '변경할 내용이 없습니다' });
-
-  params.push(id);
-  db.prepare(`UPDATE menu_items SET ${updates.join(', ')} WHERE id = ?`).run(...params);
-  res.json(db.prepare('SELECT * FROM menu_items WHERE id = ?').get(id));
-});
-
-app.delete('/api/menu-items/:id', (req, res) => {
-  const user = requireAdmin(req, res);
-  if (!user) return;
-  const id = Number(req.params.id);
-  const result = db.prepare('DELETE FROM menu_items WHERE id = ?').run(id);
-  if (result.changes === 0) return res.status(404).json({ error: '메뉴를 찾을 수 없습니다' });
-  res.json({ ok: true });
-});
-
-// --- Orders ---
-
-app.post('/api/orders', (req, res) => {
-  const user = requireUser(req, res);
-  if (!user) return;
-
-  let { meal_type, menu, service_date } = req.body || {};
-  menu = String(menu || '').trim();
-
-  if (!['breakfast', 'late_night'].includes(meal_type)) {
-    return res.status(400).json({ error: '잘못된 식사 유형입니다' });
-  }
-  if (!menu) return res.status(400).json({ error: '메뉴를 입력해주세요' });
-  if (menu.length > 200) return res.status(400).json({ error: '메뉴가 너무 깁니다 (200자 이하)' });
-  if (service_date && !validDate(service_date)) {
-    return res.status(400).json({ error: '잘못된 날짜 형식입니다 (YYYY-MM-DD)' });
-  }
-  if (!service_date) {
-    service_date = db.prepare("SELECT date('now', 'localtime') AS d").get().d;
-  }
-
-  const existing = db.prepare(`
-    SELECT * FROM meal_orders
-    WHERE user_id = ? AND meal_type = ? AND service_date = ? AND status = 'pending'
-  `).get(user.id, meal_type, service_date);
-
-  if (existing) {
-    db.prepare('UPDATE meal_orders SET menu = ?, created_at = CURRENT_TIMESTAMP WHERE id = ?')
-      .run(menu, existing.id);
-    return res.json(db.prepare('SELECT * FROM meal_orders WHERE id = ?').get(existing.id));
-  }
-
-  const result = db.prepare(`
-    INSERT INTO meal_orders (user_id, meal_type, menu, service_date) VALUES (?, ?, ?, ?)
-  `).run(user.id, meal_type, menu, service_date);
-
-  res.json(db.prepare('SELECT * FROM meal_orders WHERE id = ?').get(Number(result.lastInsertRowid)));
-});
-
-// Batch: one menu, many dates
-app.post('/api/orders/batch', (req, res) => {
-  const user = requireUser(req, res);
-  if (!user) return;
-
-  let { meal_type, menu, dates } = req.body || {};
-  menu = String(menu || '').trim();
-
-  if (!['breakfast', 'late_night'].includes(meal_type)) {
-    return res.status(400).json({ error: '잘못된 식사 유형입니다' });
-  }
-  if (!menu) return res.status(400).json({ error: '메뉴를 입력해주세요' });
-  if (menu.length > 200) return res.status(400).json({ error: '메뉴가 너무 깁니다 (200자 이하)' });
-  if (!Array.isArray(dates) || dates.length === 0) {
-    return res.status(400).json({ error: '날짜를 한 개 이상 선택해주세요' });
-  }
-  if (dates.length > 31) return res.status(400).json({ error: '한번에 최대 31일까지 가능합니다' });
-
-  const uniq = [...new Set(dates)];
-  for (const d of uniq) {
-    if (!validDate(d)) return res.status(400).json({ error: `잘못된 날짜: ${d}` });
-  }
-
-  const findStmt = db.prepare(`
-    SELECT id FROM meal_orders
-    WHERE user_id = ? AND meal_type = ? AND service_date = ? AND status = 'pending'
-  `);
-  const updStmt = db.prepare('UPDATE meal_orders SET menu = ?, created_at = CURRENT_TIMESTAMP WHERE id = ?');
-  const insStmt = db.prepare(`
-    INSERT INTO meal_orders (user_id, meal_type, menu, service_date) VALUES (?, ?, ?, ?)
-  `);
-
-  const created = [];
-  const updated = [];
-
-  db.prepare('BEGIN').run();
+function requireAuth(req, res, next) {
+  const token = req.cookies?.ms_token;
+  if (!token) return res.status(401).json({ error: "Unauthorized" });
   try {
-    for (const d of uniq) {
-      const existing = findStmt.get(user.id, meal_type, d);
-      if (existing) {
-        updStmt.run(menu, existing.id);
-        updated.push(d);
-      } else {
-        insStmt.run(user.id, meal_type, menu, d);
-        created.push(d);
-      }
+    req.user = jwt.verify(token, JWT_SECRET);
+    next();
+  } catch {
+    res.clearCookie("ms_token");
+    res.status(401).json({ error: "Session expired" });
+  }
+}
+
+// ══════════════════════════════════════
+// STATIC FILES
+// ══════════════════════════════════════
+app.use("/images", express.static(path.join(__dirname, "public", "images")));
+
+// ══════════════════════════════════════
+// DISCORD OAUTH2 ROUTES
+// ══════════════════════════════════════
+app.get("/auth/discord", (req, res) => {
+  if (!DISCORD_CLIENT_ID) {
+    return res.status(500).send("DISCORD_CLIENT_ID 환경변수가 설정되지 않았습니다.");
+  }
+  const params = new URLSearchParams({
+    client_id:     DISCORD_CLIENT_ID,
+    redirect_uri:  DISCORD_REDIRECT_URI,
+    response_type: "code",
+    scope:         "identify",
+  });
+  res.redirect(`https://discord.com/oauth2/authorize?${params}`);
+});
+
+app.get("/auth/callback", async (req, res) => {
+  const { code, error } = req.query;
+  if (error || !code) return res.redirect("/?error=discord_denied");
+
+  try {
+    const tokenRes = await fetch("https://discord.com/api/oauth2/token", {
+      method:  "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body:    new URLSearchParams({
+        client_id:     DISCORD_CLIENT_ID,
+        client_secret: DISCORD_CLIENT_SECRET,
+        grant_type:    "authorization_code",
+        code,
+        redirect_uri:  DISCORD_REDIRECT_URI,
+      }),
+    });
+    const tokenData = await tokenRes.json();
+    if (!tokenData.access_token) {
+      console.error("[AUTH] Discord token error:", tokenData);
+      return res.redirect("/?error=token_failed&detail=" + encodeURIComponent(tokenData.error || "unknown"));
     }
-    db.prepare('COMMIT').run();
+
+    const userRes = await fetch("https://discord.com/api/users/@me", {
+      headers: { Authorization: `Bearer ${tokenData.access_token}` },
+    });
+    const user = await userRes.json();
+    console.log(`[AUTH] Login attempt: ${user.username} (${user.id})`);
+
+    if (!ALLOWED_USER_IDS.includes(user.id)) {
+      console.warn(`[AUTH] ❌ Denied: ${user.username} (${user.id}). Whitelisted IDs: [${ALLOWED_USER_IDS.join(", ")}]`);
+      // ★ 본인 ID를 URL에 담아 화면에 표시 → ALLOWED_USER_IDS에 어떤 ID를 추가해야 하는지 즉시 확인 가능
+      return res.redirect(`/?error=unauthorized&uid=${encodeURIComponent(user.id)}&uname=${encodeURIComponent(user.username)}`);
+    }
+
+    const payload = {
+      id:            user.id,
+      username:      user.username,
+      discriminator: user.discriminator || "0",
+      avatar:        user.avatar,
+    };
+    const jwtToken = jwt.sign(payload, JWT_SECRET, { expiresIn: "7d" });
+
+    res.cookie("ms_token", jwtToken, {
+      httpOnly: true,
+      maxAge:   7 * 24 * 60 * 60 * 1000,
+      sameSite: "lax",
+      secure:   true,  // Railway = 항상 HTTPS
+      path:     "/",
+    });
+
+    console.log(`[AUTH] ✅ Logged in: ${user.username} (${user.id}) — cookie set, redirecting to /`);
+    res.redirect("/");
+
   } catch (e) {
-    db.prepare('ROLLBACK').run();
-    return res.status(500).json({ error: '저장 중 오류: ' + e.message });
+    console.error("[AUTH] callback error:", e);
+    res.redirect("/?error=server_error&detail=" + encodeURIComponent(e.message || "unknown"));
   }
-
-  res.json({ created, updated });
 });
 
-app.get('/api/orders/my', (req, res) => {
-  const user = requireUser(req, res);
-  if (!user) return;
-  const { from } = req.query;
-  const fromDate = (from && validDate(from)) ? from : db.prepare("SELECT date('now', 'localtime') AS d").get().d;
-
-  const orders = db.prepare(`
-    SELECT * FROM meal_orders
-    WHERE user_id = ? AND status = 'pending' AND service_date >= ?
-    ORDER BY service_date, meal_type
-  `).all(user.id, fromDate);
-  res.json(orders);
+app.get("/auth/logout", (req, res) => {
+  res.clearCookie("ms_token");
+  res.redirect("/");
 });
 
-app.delete('/api/orders/:id', (req, res) => {
-  const user = requireUser(req, res);
-  if (!user) return;
-
-  const orderId = Number(req.params.id);
-  const order = db.prepare('SELECT * FROM meal_orders WHERE id = ?').get(orderId);
-  if (!order) return res.status(404).json({ error: '주문을 찾을 수 없습니다' });
-  if (order.user_id !== user.id) return res.status(403).json({ error: '본인 주문만 취소 가능합니다' });
-
-  db.prepare('DELETE FROM meal_orders WHERE id = ?').run(orderId);
-  res.json({ ok: true });
+app.get("/api/me", (req, res) => {
+  const token = req.cookies?.ms_token;
+  if (!token) return res.json({ auth: false });
+  try {
+    const user = jwt.verify(token, JWT_SECRET);
+    res.json({ auth: true, user });
+  } catch {
+    res.clearCookie("ms_token");
+    res.json({ auth: false });
+  }
 });
 
-app.get('/api/orders/active', (req, res) => {
-  const user = requireUser(req, res);
-  if (!user) return;
+// ★ 환경설정 진단 엔드포인트 (시크릿은 노출 안 함, 존재 여부만)
+app.get("/api/auth/debug", (req, res) => {
+  res.json({
+    client_id_set:     !!DISCORD_CLIENT_ID,
+    client_secret_set: !!DISCORD_CLIENT_SECRET,
+    redirect_uri:      DISCORD_REDIRECT_URI,
+    jwt_secret_set:    JWT_SECRET !== "change-this-secret-in-production",
+    allowed_user_count: ALLOWED_USER_IDS.length,
+    allowed_user_ids:   ALLOWED_USER_IDS,
+    node_env:          process.env.NODE_ENV || "(not set)",
+  });
+});
 
-  const { meal_type, date } = req.query;
-  const conds = ["mo.status = 'pending'"];
-  const params = [];
-
-  if (meal_type) {
-    if (!['breakfast', 'late_night'].includes(meal_type)) {
-      return res.status(400).json({ error: '잘못된 식사 유형입니다' });
+// ★★★ 쿠키 진단 — 브라우저가 쿠키를 보내고 있는지 확인 ★★★
+app.get("/api/cookie-debug", (req, res) => {
+  let jwt_status = "no_cookie";
+  let jwt_payload = null;
+  if (req.cookies?.ms_token) {
+    try {
+      jwt_payload = jwt.verify(req.cookies.ms_token, JWT_SECRET);
+      jwt_status = "valid";
+    } catch (e) {
+      jwt_status = "invalid: " + e.message;
     }
-    conds.push('mo.meal_type = ?'); params.push(meal_type);
   }
-  if (date) {
-    if (!validDate(date)) return res.status(400).json({ error: '잘못된 날짜 형식입니다' });
-    conds.push('mo.service_date = ?'); params.push(date);
-  }
-
-  const orders = db.prepare(`
-    SELECT mo.id, mo.meal_type, mo.menu, mo.service_date, mo.created_at,
-           u.employee_id, u.name
-    FROM meal_orders mo
-    JOIN users u ON mo.user_id = u.id
-    WHERE ${conds.join(' AND ')}
-    ORDER BY mo.service_date, mo.meal_type, mo.created_at
-  `).all(...params);
-  res.json(orders);
+  res.json({
+    cookies_seen:       Object.keys(req.cookies || {}),
+    has_ms_token:       !!req.cookies?.ms_token,
+    ms_token_length:    req.cookies?.ms_token?.length || 0,
+    jwt_status,
+    jwt_payload,
+    raw_cookie_header:  req.headers.cookie || "(none)",
+    host:               req.headers.host,
+    protocol_seen:      req.protocol,           // 'http' or 'https'
+    req_secure:         req.secure,             // trust proxy 작동 시 true
+    x_forwarded_proto:  req.headers['x-forwarded-proto'] || "(none)",
+  });
 });
 
-// Summary for acting date picker: count per (date, meal_type)
-app.get('/api/orders/active/summary', (req, res) => {
-  const user = requireUser(req, res);
-  if (!user) return;
-  const days = Math.min(14, Math.max(1, Number(req.query.days) || 7));
-  const rows = db.prepare(`
-    SELECT service_date, meal_type, COUNT(*) AS n
-    FROM meal_orders
-    WHERE status = 'pending'
-      AND service_date >= date('now', 'localtime')
-      AND service_date <= date('now', 'localtime', '+${days} days')
-    GROUP BY service_date, meal_type
-    ORDER BY service_date
-  `).all();
-  res.json(rows);
-});
+// ══════════════════════════════════════
+// MAP NAMES
+// ══════════════════════════════════════
+const MAPNAMES_PATH = path.join(__dirname, "public", "mapnames.json");
+function loadMapNames() {
+  try {
+    if (fs.existsSync(MAPNAMES_PATH))
+      return JSON.parse(fs.readFileSync(MAPNAMES_PATH, "utf8"));
+  } catch(e) { console.error("[mapnames] load error:", e.message); }
+  return {};
+}
+function saveMapNames(obj) {
+  fs.writeFileSync(MAPNAMES_PATH, JSON.stringify(obj, null, 2), "utf8");
+}
 
-app.post('/api/orders/:id/pickup', (req, res) => {
-  const user = requireUser(req, res);
-  if (!user) return;
+// ══════════════════════════════════════
+// DB READY → ROUTES
+// ══════════════════════════════════════
+dbMod.getDb().then(() => {
+  console.log("[DB] Ready");
 
-  const result = db.prepare(`
-    UPDATE meal_orders
-    SET status = 'picked_up', picked_up_at = CURRENT_TIMESTAMP, picked_up_by = ?
-    WHERE id = ? AND status = 'pending'
-  `).run(user.id, Number(req.params.id));
+  // 봇 전용 (공개 — Lua 토큰)
+  app.use("/api/bot-heartbeat/client", require("./routes/heartbeat"));
 
-  if (result.changes === 0) {
-    return res.status(404).json({ error: '이미 처리되었거나 없는 주문입니다' });
-  }
-  res.json({ ok: true });
-});
+  // ★★★ NEW: PC 관리 ★★★
+  //   - /register, /heartbeat, /screenshot 는 라우터 내부에서 owner/token 검증 (Electron이 호출)
+  //   - /list, PATCH/DELETE/:pc_id, /screenshot/:pc_id 는 라우터 내부에서 requireAuth
+  app.use("/api/pc", require("./routes/pc"));
 
-app.post('/api/admin/cleanup', (req, res) => {
-  const user = requireAdmin(req, res);
-  if (!user) return;
-  const result = db.prepare(`
-    DELETE FROM meal_orders
-    WHERE status = 'picked_up' AND picked_up_at < datetime('now', '-7 days')
-  `).run();
-  res.json({ deleted: result.changes });
-});
+  // 인증 필요
+  app.use("/api/tracker",        require("./routes/tracker"));
+  app.use("/api/seller",         requireAuth, require("./routes/seller"));
+  app.use("/api/forced-offline", requireAuth, require("./routes/forced"));
+  app.use("/api/management",     require("./routes/management").router);
 
-app.get('/health', (req, res) => res.json({ ok: true }));
+  // ★★★ NEW: PC 태그 API ★★★
+  app.get("/api/bot-tags", requireAuth, (req, res) => {
+    const rows = dbMod.all("SELECT ign, pc_tag, updated_at FROM bot_pc_tags ORDER BY ign");
+    return res.json(rows);
+  });
+  app.post("/api/bot-tags", requireAuth, (req, res) => {
+    const { ign, pc_tag } = req.body;
+    if (!ign) return res.status(400).json({ error: "ign required" });
+    const now = Date.now();
+    if (!pc_tag || !pc_tag.trim()) {
+      dbMod.run("DELETE FROM bot_pc_tags WHERE ign=?", [ign]);
+      return res.json({ ok: true, ign, pc_tag: "", deleted: true });
+    }
+    const tag = pc_tag.trim().slice(0, 32);
+    dbMod.run(
+      `INSERT INTO bot_pc_tags (ign, pc_tag, updated_at) VALUES (?, ?, ?)
+       ON CONFLICT(ign) DO UPDATE SET pc_tag=excluded.pc_tag, updated_at=excluded.updated_at`,
+      [ign, tag, now]
+    );
+    return res.json({ ok: true, ign, pc_tag: tag });
+  });
+  app.delete("/api/bot-tags/:ign", requireAuth, (req, res) => {
+    dbMod.run("DELETE FROM bot_pc_tags WHERE ign=?", [req.params.ign]);
+    return res.json({ ok: true });
+  });
 
-app.listen(PORT, () => {
-  console.log(`KNUH Meal Dashboard listening on :${PORT}`);
-  console.log(`DB: ${DB_PATH}`);
+  // ★★★ NEW: 봇 완전 삭제 (메소트래커 + 하트비트 + 메소히스토리 + PC태그 + 강제오프라인) ★★★
+  app.delete("/api/bot/:ign", requireAuth, (req, res) => {
+    const ign = req.params.ign;
+    if (!ign) return res.status(400).json({ error: "ign required" });
+    try {
+      dbMod.run("DELETE FROM private_data    WHERE ign=?", [ign]);
+      dbMod.run("DELETE FROM heartbeats      WHERE ign=?", [ign]);
+      dbMod.run("DELETE FROM meso_history    WHERE ign=?", [ign]);
+      dbMod.run("DELETE FROM bot_pc_tags     WHERE ign=?", [ign]);
+      dbMod.run("DELETE FROM forced_offline  WHERE ign=?", [ign]);
+      dbMod.run("DELETE FROM bot_change_log  WHERE ign=?", [ign]);
+      dbMod.run("DELETE FROM meso_alert_log  WHERE ign=?", [ign]);
+      console.log(`[BOT-DELETE] ✅ Removed all records for ign=${ign} by ${req.user?.username}`);
+      return res.json({ ok: true, ign, deleted: true });
+    } catch (e) {
+      console.error("[BOT-DELETE] error:", e);
+      return res.status(500).json({ error: e.message });
+    }
+  });
+
+  // Map names
+  app.get("/api/mapnames", requireAuth, (req, res) => {
+    const obj  = loadMapNames();
+    const rows = Object.entries(obj).map(([map_id, map_name]) => ({ map_id, map_name }));
+    return res.json(rows);
+  });
+  app.post("/api/mapnames", requireAuth, (req, res) => {
+    const { map_id, map_name } = req.body;
+    if (!map_id || !map_name) return res.status(400).json({ error: "map_id and map_name required" });
+    const obj = loadMapNames();
+    obj[String(map_id)] = map_name;
+    saveMapNames(obj);
+    return res.json({ ok: true });
+  });
+  app.delete("/api/mapnames/:id", requireAuth, (req, res) => {
+    const obj = loadMapNames();
+    delete obj[req.params.id];
+    saveMapNames(obj);
+    return res.json({ ok: true });
+  });
+
+  // Change log
+  app.get("/api/bot-change-log", requireAuth, (req, res) => {
+    const limit = parseInt(req.query.limit) || 300;
+    const rows  = dbMod.all("SELECT * FROM bot_change_log ORDER BY ts DESC LIMIT ?", [limit]);
+    return res.json(rows);
+  });
+  app.delete("/api/bot-change-log", requireAuth, (req, res) => {
+    dbMod.run("DELETE FROM bot_change_log");
+    return res.json({ ok: true });
+  });
+
+  // Clients
+  app.post("/api/clients", requireAuth, (req, res) => {
+    const { owner, token } = req.body;
+    if (!owner || !token) return res.status(400).json({ error: "owner and token required" });
+    try {
+      dbMod.run("INSERT OR REPLACE INTO clients (owner, token) VALUES (?, ?)", [owner, token]);
+      return res.json({ ok: true });
+    } catch(e) { return res.status(500).json({ error: e.message }); }
+  });
+  app.get("/api/clients", requireAuth, (req, res) => {
+    return res.json(dbMod.all("SELECT owner FROM clients ORDER BY owner"));
+  });
+
+  // Catch-all
+  app.get("*", (req, res) => {
+    res.sendFile(path.join(__dirname, "public", "index.html"));
+  });
+
+  app.listen(PORT, () => {
+    console.log(`[SERVER] ✅  Running on port ${PORT}`);
+    console.log(`[AUTH]   Allowed users: ${ALLOWED_USER_IDS.length ? ALLOWED_USER_IDS.join(", ") : "(none)"}`);
+  });
 });
