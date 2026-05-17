@@ -5,7 +5,7 @@
 
   const STORAGE_KEY = 'knuh.user.v1';
   const ROLE_KEY = 'knuh.role.v1';
-  const POLL_MS = 15000;
+  const POLL_MS = 3000;
 
   // Meal types ordered breakfast first throughout the app
   const MEAL_ORDER = ['breakfast', 'late_night'];
