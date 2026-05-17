@@ -162,6 +162,7 @@ db.exec(`
     { name: '햄버거/샌드위치', emoji: '🍔', slots: [
       { name: '메인', options: ['햄버거', '샌드위치'] },
       { name: '음료', is_fixed: 1, fixed_text: '음료' },
+      { name: '계란', is_fixed: 1, fixed_text: '계란 2개' },
     ]},
     { name: '닭가슴살', emoji: '🍗', slots: [
       { name: '닭가슴살', is_fixed: 1, fixed_text: '닭가슴살' },
@@ -293,34 +294,38 @@ function loadBreakfastStructure({ include_inactive = false } = {}) {
 //   note?: string
 // }
 function summarizeCategoryChoice(cc) {
+  const emoji = cc.category_emoji || '';
+  const name = cc.category_name || '';
   const parts = [];
   for (const s of (cc.slots || [])) {
     if (s.fixed) { parts.push(s.fixed); continue; }
     const pri = Array.isArray(s.priority) ? s.priority : [];
-    let txt = '';
-    if (pri.length === 1) txt = pri[0];
-    else if (pri.length > 1) txt = pri.map((v, i) => `${v}(${i + 1})`).join('/');
-    if (s.any) txt = txt ? `${txt} or 아무거나` : '아무거나';
-    if (!txt) continue;
-    parts.push(`${s.slot_name}: ${txt}`);
+    let txt = pri.join('→');
+    if (s.any) txt = txt ? `${txt}→아무거나` : '아무거나';
+    if (txt) parts.push(txt);
   }
-  return `${cc.category_name}{${parts.join(' · ')}}`;
+  const detail = parts.join(' | ');
+  return detail ? `${emoji}${name} · ${detail}` : `${emoji}${name}`;
 }
 
 function summarizeBreakfast(sel) {
   if (!sel) return '';
+  if (sel.meal_form === 'no_meal') {
+    let s = '🚫 식사 안 받음';
+    if (sel.note) s += ` — ${sel.note}`;
+    return s;
+  }
   if (sel.meal_form === 'kimbap') {
-    let s = `[김밥/주먹밥] ${sel.kimbap_choice || ''}`;
+    let s = `🍙 ${sel.kimbap_choice || ''}`;
     if (sel.note) s += ` — ${sel.note}`;
     return s;
   }
   // snack_pick
   const prios = Array.isArray(sel.category_priorities) ? sel.category_priorities : [];
   if (prios.length === 0) return '';
-  const head = `[스낵픽]`;
   const tiers = prios.map((cc, i) => `${i + 1}순위 ${summarizeCategoryChoice(cc)}`).join(' → ');
-  const tail = sel.fallback_any ? ' → 없으면 아무거나' : '';
-  let s = `${head} ${tiers}${tail}`;
+  const tail = sel.fallback_any ? ' → 🎲아무거나' : '';
+  let s = `🥣 ${tiers}${tail}`;
   if (sel.note) s += ` — ${sel.note}`;
   return s;
 }
@@ -374,6 +379,13 @@ function validateCategoryChoice(catChoice) {
 function validateBreakfastSelection(input) {
   if (!input || typeof input !== 'object') return { error: '선택 정보가 올바르지 않습니다' };
   const form = input.meal_form;
+
+  if (form === 'no_meal') {
+    const note = typeof input.note === 'string' ? input.note.trim().slice(0, 200) : '';
+    const sel = { meal_form: 'no_meal' };
+    if (note) sel.note = note;
+    return { selection: sel, menu: summarizeBreakfast(sel) };
+  }
 
   if (form === 'kimbap') {
     const choice = String(input.kimbap_choice || '').trim();
@@ -953,6 +965,60 @@ app.post('/api/orders/:id/pickup', (req, res) => {
   res.json({ ok: true });
 });
 
+// Admin: manually insert orders (for data recovery)
+app.post('/api/admin/orders/manual', (req, res) => {
+  const user = requireAdmin(req, res);
+  if (!user) return;
+
+  const { employee_id, name, meal_type, menu, selection, service_date } = req.body || {};
+
+  if (!employee_id || !name) return res.status(400).json({ error: '사번과 이름을 입력해주세요' });
+  if (!['breakfast', 'late_night'].includes(meal_type)) return res.status(400).json({ error: '잘못된 식사 유형입니다' });
+  if (!service_date || !validDate(service_date)) return res.status(400).json({ error: '날짜 형식이 올바르지 않습니다 (YYYY-MM-DD)' });
+
+  // Derive menu text and selection JSON (same as regular order endpoints)
+  let finalMenu = menu ? String(menu).trim() : '';
+  let selectionJSON = null;
+
+  if (meal_type === 'breakfast' && selection) {
+    const v = validateBreakfastSelection(selection);
+    if (v.error) return res.status(400).json({ error: v.error });
+    selectionJSON = JSON.stringify(v.selection);
+    finalMenu = v.menu;
+  } else if (meal_type === 'late_night') {
+    if (!finalMenu) return res.status(400).json({ error: '메뉴를 입력해주세요' });
+  } else {
+    if (!finalMenu) return res.status(400).json({ error: '메뉴를 입력해주세요' });
+  }
+
+  // Upsert user
+  let target = getUserByEmployeeId(String(employee_id).trim());
+  if (target) {
+    if (target.name !== String(name).trim()) {
+      db.prepare('UPDATE users SET name = ? WHERE id = ?').run(String(name).trim(), target.id);
+    }
+  } else {
+    const r = db.prepare('INSERT INTO users (employee_id, name) VALUES (?, ?)').run(String(employee_id).trim(), String(name).trim());
+    target = db.prepare('SELECT * FROM users WHERE id = ?').get(Number(r.lastInsertRowid));
+  }
+
+  // Upsert order
+  const existing = db.prepare(`
+    SELECT id FROM meal_orders WHERE user_id = ? AND meal_type = ? AND service_date = ? AND status = 'pending'
+  `).get(target.id, meal_type, service_date);
+
+  if (existing) {
+    db.prepare('UPDATE meal_orders SET menu = ?, selection = ?, created_at = CURRENT_TIMESTAMP WHERE id = ?')
+      .run(finalMenu, selectionJSON, existing.id);
+    return res.json({ ok: true, action: 'updated', order_id: existing.id });
+  }
+
+  const ins = db.prepare(`
+    INSERT INTO meal_orders (user_id, meal_type, menu, selection, service_date) VALUES (?, ?, ?, ?, ?)
+  `).run(target.id, meal_type, finalMenu, selectionJSON, service_date);
+  res.json({ ok: true, action: 'created', order_id: Number(ins.lastInsertRowid) });
+});
+
 app.post('/api/admin/cleanup', (req, res) => {
   const user = requireAdmin(req, res);
   if (!user) return;
@@ -973,4 +1039,44 @@ app.get('/guide', (req, res) => {
 app.listen(PORT, () => {
   console.log(`KNUH Meal Dashboard listening on :${PORT}`);
   console.log(`DB: ${DB_PATH}`);
+
+  // ── 자정 자동 삭제: 전날(service_date < 오늘) 주문 전량 삭제 ──────────────
+  function scheduleMidnightCleanup() {
+    const now = new Date();
+    // Next midnight (local)
+    const next = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 0, 0, 5); // 00:00:05
+    const msUntil = next - now;
+    setTimeout(() => {
+      try {
+        const today = new Date().toLocaleDateString('sv-SE'); // YYYY-MM-DD
+        const result = db.prepare(`
+          DELETE FROM meal_orders
+          WHERE service_date < ?
+        `).run(today);
+        console.log(`[midnight cleanup] deleted ${result.changes} orders older than ${today}`);
+      } catch (e) {
+        console.error('[midnight cleanup] error:', e);
+      }
+      scheduleMidnightCleanup(); // reschedule for next midnight
+    }, msUntil);
+    console.log(`[midnight cleanup] scheduled in ${Math.round(msUntil / 60000)}min`);
+  }
+  scheduleMidnightCleanup();
+  // ──────────────────────────────────────────────────────────────────────────
+
+  // Warn if DB is likely on ephemeral storage on Railway
+  const onRailway = !!(process.env.RAILWAY_ENVIRONMENT || process.env.RAILWAY_PROJECT_ID);
+  const isEphemeral = !DB_PATH.startsWith('/data') && !DB_PATH.startsWith('/mnt') && !DB_PATH.startsWith('/var/lib');
+  if (onRailway && isEphemeral) {
+    console.warn('');
+    console.warn('==================================================================');
+    console.warn('⚠️  WARNING: DB is on EPHEMERAL storage. Data will be LOST on every');
+    console.warn('   redeploy or container restart.');
+    console.warn('');
+    console.warn('   To fix: in Railway dashboard:');
+    console.warn('   1. Service → Settings → Volumes → New Volume, mount at /data');
+    console.warn('   2. Variables → add DATABASE_PATH = /data/knuh.db');
+    console.warn('==================================================================');
+    console.warn('');
+  }
 });
