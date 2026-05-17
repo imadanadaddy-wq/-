@@ -17,15 +17,27 @@
 
   // Applicant
   let applicantStep = 'home';      // 'home' | 'date' | 'menu' | 'done'
-  let draftMealType = null;        // chosen meal type during stepped flow
-  let draftDates = [];             // ['YYYY-MM-DD', ...]
+  let draftMealType = null;
+  let draftDates = [];
   let draftMenuName = '';
   let draftCustomText = '';
-  let lastSubmitted = null;        // {meal_type, menu, dates, isUpdate}
+
+  // Breakfast draft
+  let bfStep = null;               // null | 'form' | 'kimbap' | 'cat1' | 'tier' | 'fallback' | 'note'
+  let draftMealForm = null;        // 'snack_pick' | 'kimbap'
+  let draftKimbapChoice = null;
+  // For snack_pick: array of category choices in priority order
+  // each item: { category_id, slots: { [slot_id]: { priority: [], any: bool } } }
+  let draftPriorities = [];
+  let draftFallbackAny = false;
+  let draftBuildingTier = null;    // index of priority being currently configured (0..N)
+  let draftNote = '';
+
+  let lastSubmitted = null;
   let myOrders = [];
 
   // Acting
-  let actingStep = 'choose'; // 'choose' | 'list'
+  let actingStep = 'choose';
   let actingMealType = null;
   let actingDate = null;
   let activeOrders = [];
@@ -34,6 +46,9 @@
   // Admin
   let adminMealTab = 'breakfast';
   let adminItems = [];
+  let breakfastStructure = [];
+  let adminBreakfastExpanded = new Set();
+  let kimbapOptions = [];
 
   let menuItemsCache = { breakfast: [], late_night: [] };
 
@@ -352,6 +367,7 @@
         draftDates = [todayStr()];
         draftMenuName = '';
         draftCustomText = '';
+        resetBreakfastDraft();
         applicantStep = 'date';
         renderApplicantStep();
       }));
@@ -438,9 +454,9 @@
 
     $('#stepNext').addEventListener('click', () => {
       if (draftDates.length === 0) return;
-      // If single date and existing order present, pre-fill menu
-      if (draftDates.length === 1) {
-        const ex = myOrders.find(o => o.service_date === draftDates[0] && o.meal_type === draftMealType);
+      // If single date and existing order present for late_night, pre-fill menu text
+      if (draftMealType === 'late_night' && draftDates.length === 1) {
+        const ex = myOrders.find(o => o.service_date === draftDates[0] && o.meal_type === 'late_night');
         if (ex) draftCustomText = ex.menu;
       }
       applicantStep = 'menu';
@@ -449,14 +465,19 @@
   }
 
   function renderApplicantMenu() {
-    const items = menuItemsCache[draftMealType] || [];
+    if (draftMealType === 'breakfast') return renderApplicantBreakfastMenu();
+    return renderApplicantLateNightMenu();
+  }
+
+  function renderApplicantLateNightMenu() {
+    const items = menuItemsCache.late_night || [];
     const dateLabel = draftDates.length === 1
       ? fmtFull(draftDates[0])
       : `${draftDates.length}일 (${draftDates.map(d => fmtDate(d, { withDow: false })).join(', ')})`;
 
     root.innerHTML = `
       ${renderBrand()}
-      ${applicantHeader(`${mealEmoji(draftMealType)} ${mealLabel(draftMealType)} 신청`, { onBack: true, step: 2, totalSteps: 3 })}
+      ${applicantHeader(`🍜 야식 신청`, { onBack: true, step: 2, totalSteps: 3 })}
 
       <div class="card step-card">
         <h2 class="step-h">메뉴 선택</h2>
@@ -491,16 +512,13 @@
       </div>
     `;
 
-    $('#stepBack').addEventListener('click', () => {
-      applicantStep = 'date';
-      renderApplicantStep();
-    });
+    $('#stepBack').addEventListener('click', () => { applicantStep = 'date'; renderApplicantStep(); });
 
     document.querySelectorAll('[data-menu]').forEach(b =>
       b.addEventListener('click', () => {
         draftMenuName = b.dataset.menu;
         draftCustomText = '';
-        renderApplicantMenu();
+        renderApplicantLateNightMenu();
       }));
 
     const ta = $('#menuInput');
@@ -515,43 +533,509 @@
     $('#stepSubmit').addEventListener('click', async () => {
       const menu = (draftCustomText || ta.value || '').trim() || draftMenuName;
       if (!menu) { toast('메뉴를 선택하거나 입력해주세요'); return; }
-
-      const btn = $('#stepSubmit');
-      btn.disabled = true; btn.textContent = '신청 중...';
-
-      try {
-        const r = await api('/api/orders/batch', {
-          method: 'POST',
-          body: JSON.stringify({ meal_type: draftMealType, menu, dates: draftDates })
-        });
-        lastSubmitted = {
-          meal_type: draftMealType,
-          menu,
-          dates: [...draftDates],
-          created: r.created,
-          updated: r.updated,
-        };
-        await loadMyOrders();
-        applicantStep = 'done';
-        renderApplicantStep();
-      } catch (e) {
-        toast(e.message);
-        btn.disabled = false;
-        btn.textContent = draftDates.length === 1 ? '신청하기' : `${draftDates.length}일 신청하기`;
-      }
+      await submitOrders({ menu });
     });
+  }
+
+  function renderApplicantBreakfastMenu() {
+    // bfStep initial = 'form'
+    if (!bfStep) bfStep = 'form';
+    if (bfStep === 'form') return renderBfForm();
+    if (bfStep === 'kimbap') return renderBfKimbap();
+    if (bfStep === 'tier') return renderBfTier();
+    if (bfStep === 'fallback') return renderBfFallback();
+    if (bfStep === 'note') return renderBfNote();
+    bfStep = 'form'; return renderBfForm();
+  }
+
+  // ----- Step: Choose meal_form -----
+  function renderBfForm() {
+    const dateLabel = draftDates.length === 1
+      ? fmtFull(draftDates[0])
+      : `${draftDates.length}일`;
+    root.innerHTML = `
+      ${renderBrand()}
+      ${applicantHeader('🍳 조식 신청', { onBack: true, step: 2, totalSteps: 3 })}
+
+      <div class="card step-card">
+        <h2 class="step-h">식사 형태</h2>
+        <p class="step-desc">${escape(dateLabel)} · 어떤 형태로 드실까요?</p>
+
+        <div class="choice-grid" style="margin-top:8px;">
+          <button class="choice-card breakfast" data-form="snack_pick">
+            <span class="emoji">🥣</span>
+            <span class="name">스낵픽</span>
+            <span class="count">선식·죽·빵·햄버거 등</span>
+          </button>
+          <button class="choice-card late_night" data-form="kimbap">
+            <span class="emoji">🍙</span>
+            <span class="name">김밥/주먹밥</span>
+            <span class="count">요일별 고정 메뉴</span>
+          </button>
+        </div>
+      </div>
+    `;
+    $('#stepBack').addEventListener('click', () => { applicantStep = 'date'; renderApplicantStep(); });
+    document.querySelectorAll('[data-form]').forEach(b =>
+      b.addEventListener('click', () => {
+        const f = b.dataset.form;
+        draftMealForm = f;
+        if (f === 'kimbap') {
+          bfStep = 'kimbap';
+        } else {
+          // Pre-fill from existing single-date order if same form
+          if (draftDates.length === 1) {
+            const ex = myOrders.find(o =>
+              o.service_date === draftDates[0] &&
+              o.meal_type === 'breakfast' &&
+              o.selection && o.selection.meal_form === 'snack_pick'
+            );
+            if (ex && Array.isArray(ex.selection.category_priorities)) {
+              draftPriorities = ex.selection.category_priorities.map(cc => ({
+                category_id: cc.category_id,
+                slots: Object.fromEntries((cc.slots || []).filter(s => !s.fixed).map(s => [
+                  s.slot_id, { priority: (s.priority || []).slice(), any: !!s.any }
+                ])),
+              }));
+              draftFallbackAny = !!ex.selection.fallback_any;
+              draftNote = ex.selection.note || '';
+            }
+          }
+          // Start fresh if nothing to prefill
+          if (draftPriorities.length === 0) draftPriorities = [];
+          draftBuildingTier = draftPriorities.length; // append new tier
+          bfStep = 'tier';
+          ensureTierDraft();
+        }
+        renderApplicantBreakfastMenu();
+      }));
+  }
+
+  // ----- Step: kimbap pick -----
+  function renderBfKimbap() {
+    const opts = kimbapOptions.filter(k => k.active);
+    root.innerHTML = `
+      ${renderBrand()}
+      ${applicantHeader('🍙 김밥/주먹밥', { onBack: true, step: 3, totalSteps: 3 })}
+
+      <div class="card step-card">
+        <h2 class="step-h">선택</h2>
+        <p class="step-desc">오늘 제공되는 김밥/주먹밥을 골라주세요. 요일별로 메뉴가 다릅니다.</p>
+
+        ${opts.length === 0 ? `
+          <div class="empty"><span class="empty-emoji">📭</span>등록된 항목이 없습니다</div>
+        ` : `
+          <div class="menu-grid">
+            ${opts.map(o => `
+              <button class="menu-chip ${draftKimbapChoice === o.name ? 'selected' : ''}" data-kimbap="${escape(o.name)}">
+                ${escape(o.name)}
+              </button>
+            `).join('')}
+          </div>
+        `}
+
+        <div class="field" style="margin-top:14px;margin-bottom:0;">
+          <label for="noteInput">메모 (선택)</label>
+          <textarea class="textarea" id="noteInput" maxlength="200"
+            placeholder="예: 단무지 빼주세요">${escape(draftNote)}</textarea>
+        </div>
+      </div>
+
+      <div class="step-action">
+        <button class="btn btn-primary" id="stepSubmit" ${!draftKimbapChoice ? 'disabled' : ''}>
+          ${!draftKimbapChoice ? '선택해주세요'
+            : draftDates.length === 1 ? '신청하기' : `${draftDates.length}일 신청하기`}
+        </button>
+      </div>
+    `;
+    $('#stepBack').addEventListener('click', () => { bfStep = 'form'; renderApplicantBreakfastMenu(); });
+    document.querySelectorAll('[data-kimbap]').forEach(b =>
+      b.addEventListener('click', () => {
+        draftKimbapChoice = b.dataset.kimbap;
+        renderBfKimbap();
+      }));
+    const noteTa = $('#noteInput');
+    if (noteTa) noteTa.addEventListener('input', () => { draftNote = noteTa.value; });
+    $('#stepSubmit').addEventListener('click', async () => {
+      if (!draftKimbapChoice) return;
+      await submitOrders({
+        selection: { meal_form: 'kimbap', kimbap_choice: draftKimbapChoice, note: draftNote }
+      });
+    });
+  }
+
+  function ensureTierDraft() {
+    if (draftBuildingTier === draftPriorities.length) {
+      draftPriorities.push({ category_id: null, slots: {} });
+    }
+  }
+
+  function tierLabel(i) { return i === 0 ? '1순위' : i === 1 ? '2순위' : i === 2 ? '3순위' : `${i+1}순위`; }
+
+  // ----- Step: configure one priority tier (pick category + slots) -----
+  function renderBfTier() {
+    ensureTierDraft();
+    const tier = draftPriorities[draftBuildingTier];
+    const cats = breakfastStructure.filter(c => c.active !== false);
+    const usedCatIds = new Set(draftPriorities.slice(0, draftBuildingTier).map(p => p.category_id).filter(Boolean));
+    const availableCats = cats.filter(c => !usedCatIds.has(c.id));
+
+    // If category not yet chosen for this tier, show category picker
+    if (!tier.category_id) {
+      const isFirst = draftBuildingTier === 0;
+      const prevText = draftBuildingTier > 0 ? draftPriorities[draftBuildingTier - 1] : null;
+      const prevName = prevText && breakfastStructure.find(c => c.id === prevText.category_id)?.name || '';
+
+      root.innerHTML = `
+        ${renderBrand()}
+        ${applicantHeader('🥣 스낵픽', { onBack: true, step: 3, totalSteps: 3 })}
+
+        <div class="card step-card">
+          ${renderTierProgress()}
+          <h2 class="step-h">${tierLabel(draftBuildingTier)} 대분류</h2>
+          <p class="step-desc">
+            ${isFirst ? '먼저 받고 싶은 종류를 골라주세요.' :
+              `<strong>${escape(prevName)}</strong>이(가) 없을 때 받을 ${tierLabel(draftBuildingTier)} 대분류를 골라주세요.`}
+          </p>
+
+          ${availableCats.length === 0 ? `
+            <div class="empty"><span class="empty-emoji">✅</span>더 추가할 카테고리가 없습니다</div>
+          ` : `
+            <div class="cat-grid">
+              ${availableCats.map(c => `
+                <button class="cat-card" data-cat="${c.id}">
+                  <span class="cat-emoji">${c.emoji || '🍽️'}</span>
+                  <span class="cat-name">${escape(c.name)}</span>
+                </button>
+              `).join('')}
+            </div>
+          `}
+        </div>
+      `;
+
+      $('#stepBack').addEventListener('click', () => {
+        // Back from category picker → if first tier, back to form; else back to fallback question of previous tier
+        if (draftBuildingTier === 0) {
+          // Drop empty tier
+          if (tier && !tier.category_id) draftPriorities.pop();
+          bfStep = 'form';
+        } else {
+          draftPriorities.pop(); // discard the empty new tier
+          draftBuildingTier--;
+          bfStep = 'fallback';
+        }
+        renderApplicantBreakfastMenu();
+      });
+
+      document.querySelectorAll('[data-cat]').forEach(b =>
+        b.addEventListener('click', () => {
+          tier.category_id = Number(b.dataset.cat);
+          tier.slots = {};
+          renderApplicantBreakfastMenu();
+        }));
+      return;
+    }
+
+    // Category chosen: show slot editor
+    const cat = breakfastStructure.find(c => c.id === tier.category_id);
+    if (!cat) {
+      // Category was deleted; reset
+      tier.category_id = null;
+      renderApplicantBreakfastMenu();
+      return;
+    }
+    const slots = cat.slots || [];
+    const optionSlots = slots.filter(s => !s.is_fixed);
+    const fixedSlots = slots.filter(s => s.is_fixed);
+
+    const incomplete = optionSlots.some(s => {
+      const sel = tier.slots[s.id] || {};
+      const pri = Array.isArray(sel.priority) ? sel.priority : [];
+      return pri.length === 0 && !sel.any;
+    });
+
+    root.innerHTML = `
+      ${renderBrand()}
+      ${applicantHeader('🥣 스낵픽', { onBack: true, step: 3, totalSteps: 3 })}
+
+      <div class="card step-card">
+        ${renderTierProgress()}
+        <div class="cat-header">
+          <span class="cat-header-emoji">${cat.emoji || '🍽️'}</span>
+          <div class="cat-header-text">
+            <div class="cat-header-name">${tierLabel(draftBuildingTier)} · ${escape(cat.name)}</div>
+            <div class="cat-header-sub">슬롯별로 우선순위를 선택하세요. 품절 대비로 2순위까지 선택 가능.</div>
+          </div>
+          <button class="btn-ghost btn-sm cat-change" id="changeCat">변경</button>
+        </div>
+
+        ${optionSlots.length === 0 ? `
+          <div class="empty" style="margin-top:14px;">
+            <span class="empty-emoji">✅</span>
+            선택할 옵션이 없어요. 다음으로 진행하시면 됩니다.
+          </div>
+        ` : optionSlots.map(s => renderSlotEditor(s, tier)).join('')}
+
+        ${fixedSlots.length > 0 ? `
+          <div class="fixed-block">
+            <div class="fixed-label">기본 포함</div>
+            <div class="fixed-list">
+              ${fixedSlots.map(s => `<span class="fixed-chip">${escape(s.fixed_text || s.name)}</span>`).join('')}
+            </div>
+          </div>
+        ` : ''}
+      </div>
+
+      <div class="step-action">
+        <button class="btn btn-primary" id="stepNext" ${incomplete ? 'disabled' : ''}>
+          ${incomplete ? '모든 슬롯을 선택해주세요' : '다음으로'}
+        </button>
+      </div>
+    `;
+
+    $('#stepBack').addEventListener('click', () => {
+      // Back from slot editor: clear category to go back to category picker
+      tier.category_id = null;
+      tier.slots = {};
+      renderApplicantBreakfastMenu();
+    });
+
+    $('#changeCat').addEventListener('click', () => {
+      tier.category_id = null;
+      tier.slots = {};
+      renderApplicantBreakfastMenu();
+    });
+
+    document.querySelectorAll('[data-slot-opt]').forEach(b =>
+      b.addEventListener('click', () => {
+        const slotId = Number(b.dataset.slot);
+        const opt = b.dataset.slotOpt;
+        const cur = tier.slots[slotId] || { priority: [], any: false };
+        const i = cur.priority.indexOf(opt);
+        if (i >= 0) cur.priority.splice(i, 1);
+        else cur.priority.push(opt);
+        tier.slots[slotId] = cur;
+        renderBfTier();
+      }));
+
+    document.querySelectorAll('[data-slot-any]').forEach(b =>
+      b.addEventListener('click', () => {
+        const slotId = Number(b.dataset.slot);
+        const cur = tier.slots[slotId] || { priority: [], any: false };
+        cur.any = !cur.any;
+        tier.slots[slotId] = cur;
+        renderBfTier();
+      }));
+
+    $('#stepNext').addEventListener('click', () => {
+      if (incomplete) return;
+      bfStep = 'fallback';
+      renderApplicantBreakfastMenu();
+    });
+  }
+
+  function renderTierProgress() {
+    if (draftPriorities.length === 0) return '';
+    const tiers = draftPriorities.map((p, i) => {
+      const cat = p.category_id ? breakfastStructure.find(c => c.id === p.category_id) : null;
+      const name = cat ? cat.name : '?';
+      const isCur = i === draftBuildingTier;
+      return `<span class="tier-pill ${isCur ? 'cur' : ''}">${i+1}. ${escape(name)}</span>`;
+    }).join('<span class="tier-arrow">→</span>');
+    return `<div class="tier-progress">${tiers}</div>`;
+  }
+
+  function renderSlotEditor(s, tier) {
+    const sel = tier.slots[s.id] || { priority: [], any: false };
+    const opts = Array.isArray(s.options) ? s.options : [];
+    return `
+      <div class="slot-block">
+        <div class="slot-title">
+          <span>${escape(s.name)}</span>
+          <span class="slot-hint">${sel.priority.length === 0 && !sel.any ? '선택 필요' : `${sel.priority.length}개 선택`}</span>
+        </div>
+        <div class="slot-options">
+          ${opts.map(opt => {
+            const idx = sel.priority.indexOf(opt);
+            const isSel = idx >= 0;
+            const order = idx + 1;
+            return `
+              <button class="slot-opt ${isSel ? 'selected' : ''}" data-slot="${s.id}" data-slot-opt="${escape(opt)}">
+                ${isSel ? `<span class="opt-rank">${order}</span>` : ''}
+                <span>${escape(opt)}</span>
+              </button>
+            `;
+          }).join('')}
+        </div>
+        <button class="slot-any ${sel.any ? 'on' : ''}" data-slot-any data-slot="${s.id}">
+          ${sel.any ? '✓ 모두 없으면 아무거나 OK' : '없으면 아무거나 받기'}
+        </button>
+      </div>
+    `;
+  }
+
+  // ----- Step: fallback question ("선식이 없으면 어떡할까요?") -----
+  function renderBfFallback() {
+    const curTier = draftPriorities[draftBuildingTier];
+    const cat = breakfastStructure.find(c => c.id === curTier.category_id);
+    const curName = cat ? cat.name : '?';
+    const remainingCats = breakfastStructure.filter(c =>
+      c.active !== false && !draftPriorities.slice(0, draftBuildingTier + 1).some(p => p.category_id === c.id)
+    );
+    const canAddMore = remainingCats.length > 0 && draftPriorities.length < 5;
+
+    root.innerHTML = `
+      ${renderBrand()}
+      ${applicantHeader('🥣 스낵픽', { onBack: true, step: 3, totalSteps: 3 })}
+
+      <div class="card step-card">
+        ${renderTierProgress()}
+        <h2 class="step-h">📍 ${escape(curName)}도 없으면?</h2>
+        <p class="step-desc">대분류 자체가 품절일 때를 대비해서 추가 옵션을 정할 수 있어요.</p>
+
+        <div class="fallback-grid">
+          ${canAddMore ? `
+            <button class="fallback-card" data-fb="next">
+              <span class="fb-emoji">➕</span>
+              <span class="fb-name">${tierLabel(draftBuildingTier + 1)} 추가하기</span>
+              <span class="fb-desc">다른 대분류를 ${tierLabel(draftBuildingTier + 1)}로 지정</span>
+            </button>
+          ` : ''}
+          <button class="fallback-card" data-fb="any">
+            <span class="fb-emoji">🎲</span>
+            <span class="fb-name">아무거나 받기</span>
+            <span class="fb-desc">액팅이 남아있는 거 골라서 가져옴</span>
+          </button>
+          <button class="fallback-card" data-fb="stop">
+            <span class="fb-emoji">🛑</span>
+            <span class="fb-name">여기까지만</span>
+            <span class="fb-desc">${escape(curName)}이(가) 없으면 신청 안 받음 (액팅이 보면 메모로 처리)</span>
+          </button>
+        </div>
+      </div>
+    `;
+
+    $('#stepBack').addEventListener('click', () => {
+      // Back to slot editor of current tier
+      renderApplicantBreakfastMenu();
+    });
+
+    document.querySelectorAll('[data-fb]').forEach(b =>
+      b.addEventListener('click', () => {
+        const action = b.dataset.fb;
+        if (action === 'next') {
+          draftBuildingTier++;
+          ensureTierDraft();
+          bfStep = 'tier';
+        } else if (action === 'any') {
+          draftFallbackAny = true;
+          bfStep = 'note';
+        } else { // stop
+          draftFallbackAny = false;
+          bfStep = 'note';
+        }
+        renderApplicantBreakfastMenu();
+      }));
+  }
+
+  // ----- Step: note + submit -----
+  function renderBfNote() {
+    const summary = summarizeSelection({
+      meal_form: 'snack_pick',
+      category_priorities: draftPriorities.map(p => buildCategoryChoice(p)),
+      fallback_any: draftFallbackAny,
+    });
+
+    root.innerHTML = `
+      ${renderBrand()}
+      ${applicantHeader('🥣 스낵픽', { onBack: true, step: 3, totalSteps: 3 })}
+
+      <div class="card step-card">
+        <h2 class="step-h">최종 확인</h2>
+        <p class="step-desc">아래 신청 내용으로 제출합니다.</p>
+
+        <div class="summary-box">${escape(summary)}</div>
+
+        <div class="field" style="margin-top:14px;margin-bottom:0;">
+          <label for="noteInput">메모 (선택)</label>
+          <textarea class="textarea" id="noteInput" maxlength="200"
+            placeholder="예: 땅콩 알러지, 단무지 빼주세요">${escape(draftNote)}</textarea>
+        </div>
+      </div>
+
+      <div class="step-action">
+        <button class="btn btn-primary" id="stepSubmit">
+          ${draftDates.length === 1 ? '신청하기' : `${draftDates.length}일 신청하기`}
+        </button>
+      </div>
+    `;
+
+    $('#stepBack').addEventListener('click', () => { bfStep = 'fallback'; renderApplicantBreakfastMenu(); });
+
+    const noteTa = $('#noteInput');
+    if (noteTa) noteTa.addEventListener('input', () => { draftNote = noteTa.value; });
+
+    $('#stepSubmit').addEventListener('click', async () => {
+      await submitOrders({
+        selection: {
+          meal_form: 'snack_pick',
+          category_priorities: draftPriorities.map(p => buildCategoryChoice(p)),
+          fallback_any: draftFallbackAny,
+          note: draftNote,
+        }
+      });
+    });
+  }
+
+  // Convert internal draft tier to API category choice
+  function buildCategoryChoice(p) {
+    const cat = breakfastStructure.find(c => c.id === p.category_id);
+    if (!cat) return { category_id: p.category_id, slots: [] };
+    const slots = (cat.slots || []).filter(s => !s.is_fixed).map(s => {
+      const sel = p.slots[s.id] || { priority: [], any: false };
+      return { slot_id: s.id, priority: sel.priority, any: !!sel.any };
+    });
+    return { category_id: p.category_id, slots };
+  }
+
+  // Shared submit (both meal types)
+  async function submitOrders(payload) {
+    const btn = $('#stepSubmit');
+    if (btn) { btn.disabled = true; btn.textContent = '신청 중...'; }
+    try {
+      const body = {
+        meal_type: draftMealType,
+        dates: draftDates,
+        ...payload,
+      };
+      const r = await api('/api/orders/batch', { method: 'POST', body: JSON.stringify(body) });
+      lastSubmitted = {
+        meal_type: draftMealType,
+        dates: [...draftDates],
+        created: r.created,
+        updated: r.updated,
+        // For done screen display
+        menu: payload.menu || null,
+        selection: payload.selection || null,
+      };
+      await loadMyOrders();
+      applicantStep = 'done';
+      renderApplicantStep();
+    } catch (e) {
+      toast(e.message);
+      if (btn) { btn.disabled = false; btn.textContent = draftDates.length === 1 ? '신청하기' : `${draftDates.length}일 신청하기`; }
+    }
   }
 
   function renderApplicantDone() {
     if (!lastSubmitted) { goHome(); return; }
-    const { meal_type, menu, dates, created, updated } = lastSubmitted;
+    const { meal_type, menu, selection, dates, created, updated } = lastSubmitted;
     const summaryText = [
       created.length ? `${created.length}일 신청` : '',
       updated.length ? `${updated.length}일 수정` : '',
     ].filter(Boolean).join(' · ');
-
-    // Sort dates breakfast-first ordering applies elsewhere; here just sort dates ascending
     const sortedDates = [...dates].sort();
+    const displayMenu = menu || (selection ? summarizeSelection(selection) : '');
 
     root.innerHTML = `
       ${renderBrand()}
@@ -561,7 +1045,8 @@
         <div class="done-emoji">✅</div>
         <h2 class="done-h">${escape(summaryText || '신청 완료')}</h2>
         <p class="step-desc" style="text-align:center;">
-          ${mealEmoji(meal_type)} ${mealLabel(meal_type)} · ${escape(menu)}
+          ${mealEmoji(meal_type)} ${mealLabel(meal_type)}
+          ${displayMenu ? '· ' + escape(displayMenu) : ''}
         </p>
         <ul class="done-dates">
           ${sortedDates.map(d => `<li>${fmtFull(d)}</li>`).join('')}
@@ -579,7 +1064,6 @@
     $('#stepClose').addEventListener('click', goHome);
     $('#doneHome').addEventListener('click', goHome);
     $('#doneViewBarcode').addEventListener('click', () => {
-      // Open viewer focused on the first date of this submission
       const sorted = sortOrders(myOrders);
       const target = sorted.findIndex(o =>
         o.meal_type === meal_type && sortedDates.includes(o.service_date)
@@ -592,13 +1076,67 @@
     });
   }
 
+  // Build a short summary string from a structured breakfast selection (client-side)
+  function summarizeSelection(sel) {
+    if (!sel) return '';
+    if (sel.meal_form === 'kimbap') {
+      return `[김밥/주먹밥] ${sel.kimbap_choice || ''}`;
+    }
+    if (sel.meal_form === 'snack_pick') {
+      const prios = Array.isArray(sel.category_priorities) ? sel.category_priorities : [];
+      if (prios.length === 0) return '';
+      const tiers = prios.map((cc, i) => {
+        const cat = breakfastStructure.find(c => c.id === Number(cc.category_id));
+        const catName = (cat && cat.name) || cc.category_name || '';
+        const slotParts = [];
+        for (const s of (cc.slots || [])) {
+          if (s.fixed) continue;
+          const pri = Array.isArray(s.priority) ? s.priority : [];
+          let txt = '';
+          if (pri.length === 1) txt = pri[0];
+          else if (pri.length > 1) txt = pri.map((v, i) => `${v}(${i + 1})`).join('/');
+          if (s.any) txt = txt ? `${txt} or 아무거나` : '아무거나';
+          if (txt) slotParts.push(txt);
+        }
+        return `${i + 1}순위 ${catName}${slotParts.length ? `(${slotParts.join(' · ')})` : ''}`;
+      }).join(' → ');
+      const tail = sel.fallback_any ? ' → 없으면 아무거나' : '';
+      return `[스낵픽] ${tiers}${tail}`;
+    }
+    // Legacy fallback (old schema with category_id at top level)
+    const cat = breakfastStructure.find(c => c.id === Number(sel.category_id));
+    const catName = (cat && cat.name) || sel.category_name || '';
+    const parts = [];
+    const slots = Array.isArray(sel.slots) ? sel.slots : [];
+    for (const s of slots) {
+      const pri = Array.isArray(s.priority) ? s.priority : [];
+      let txt = '';
+      if (pri.length === 1) txt = pri[0];
+      else if (pri.length > 1) txt = pri.map((v, i) => `${v}(${i + 1})`).join('/');
+      if (s.any) txt = txt ? `${txt} or 아무거나` : '아무거나';
+      if (txt) parts.push(txt);
+    }
+    return `[${catName}] ${parts.join(' · ')}`;
+  }
+
   function goHome() {
     applicantStep = 'home';
     draftMealType = null;
     draftDates = [];
     draftMenuName = '';
     draftCustomText = '';
+    resetBreakfastDraft();
     renderApplicantHome();
+  }
+
+  function resetBreakfastDraft() {
+    bfStep = null;
+    draftMealForm = null;
+    draftKimbapChoice = null;
+    draftPriorities = [];
+    draftFallbackAny = false;
+    draftBuildingTier = null;
+    draftNote = '';
   }
 
   function renderApplicant() {
@@ -691,7 +1229,7 @@
                 ${escape(o.name)}
                 <span class="order-eid">${escape(o.employee_id)}</span>
               </div>
-              <div class="order-menu">${escape(o.menu)}</div>
+              ${renderOrderDetailDark(o)}
             </div>
             <div class="order-chevron">›</div>
           </button>
@@ -728,6 +1266,150 @@
   function renderActing() {
     if (actingStep === 'choose') renderActingChoose();
     else renderActingList();
+  }
+
+  // Renders a single category choice (one priority tier) on light surface
+  function renderCategoryChoiceLight(cc, tierIdx) {
+    const catName = cc.category_name || '';
+    const catEmoji = cc.category_emoji || '🍽️';
+    const rows = (cc.slots || []).map(s => {
+      if (s.fixed) {
+        return `<li class="det-row"><span class="det-name">${escape(s.slot_name)}</span><span class="det-val det-fixed">${escape(s.fixed)}</span></li>`;
+      }
+      const pri = Array.isArray(s.priority) ? s.priority : [];
+      const priHtml = pri.map((v, i) => `<span class="det-pri"><span class="det-rank">${i+1}</span>${escape(v)}</span>`).join('');
+      const anyHtml = s.any ? `<span class="det-any">아무거나 OK</span>` : '';
+      return `<li class="det-row"><span class="det-name">${escape(s.slot_name)}</span><span class="det-val">${priHtml}${anyHtml || (pri.length === 0 ? '<span class="det-empty">—</span>' : '')}</span></li>`;
+    }).join('');
+    return `
+      <div class="tier-section ${tierIdx === 0 ? 'tier-primary' : 'tier-secondary'}">
+        <div class="tier-head">
+          <span class="tier-badge">${tierIdx + 1}순위</span>
+          <span class="tier-cat">${catEmoji} ${escape(catName)}</span>
+        </div>
+        <ul class="det-list">${rows}</ul>
+      </div>
+    `;
+  }
+
+  // Renders an order's content (menu / structured breakfast selection) on a light/white surface (used in viewer modal)
+  function renderOrderDetailLight(order) {
+    const sel = order.selection;
+    if (order.meal_type === 'breakfast' && sel) {
+      if (sel.meal_form === 'kimbap') {
+        return `
+          <div class="id-menu id-menu-struct">
+            <span class="label">🍙 김밥/주먹밥</span>
+            <div style="font-size:18px;font-weight:700;color:#111;margin-top:6px;">${escape(sel.kimbap_choice || '')}</div>
+            ${sel.note ? `<div class="det-note">📝 ${escape(sel.note)}</div>` : ''}
+          </div>
+        `;
+      }
+      if (sel.meal_form === 'snack_pick') {
+        const prios = Array.isArray(sel.category_priorities) ? sel.category_priorities : [];
+        const tiersHtml = prios.map((cc, i) => renderCategoryChoiceLight(cc, i)).join('');
+        const fallbackHtml = sel.fallback_any
+          ? `<div class="fallback-note"><span class="fb-icon">🎲</span> 위 메뉴들이 모두 없으면 <strong>아무거나</strong> 받아가셔도 OK</div>`
+          : '';
+        return `
+          <div class="id-menu id-menu-struct">
+            <span class="label">🥣 스낵픽</span>
+            ${tiersHtml}
+            ${fallbackHtml}
+            ${sel.note ? `<div class="det-note">📝 ${escape(sel.note)}</div>` : ''}
+          </div>
+        `;
+      }
+      // Legacy schema (single category)
+      if (Array.isArray(sel.slots)) {
+        const catName = sel.category_name || '';
+        const catEmoji = sel.category_emoji || '🍽️';
+        const rows = sel.slots.map(s => {
+          if (s.fixed) {
+            return `<li class="det-row"><span class="det-name">${escape(s.slot_name)}</span><span class="det-val det-fixed">${escape(s.fixed)}</span></li>`;
+          }
+          const pri = Array.isArray(s.priority) ? s.priority : [];
+          const priHtml = pri.map((v, i) => `<span class="det-pri"><span class="det-rank">${i+1}</span>${escape(v)}</span>`).join('');
+          const anyHtml = s.any ? `<span class="det-any">아무거나 OK</span>` : '';
+          return `<li class="det-row"><span class="det-name">${escape(s.slot_name)}</span><span class="det-val">${priHtml}${anyHtml || (pri.length === 0 ? '<span class="det-empty">—</span>' : '')}</span></li>`;
+        }).join('');
+        return `
+          <div class="id-menu id-menu-struct">
+            <span class="label">${catEmoji} ${escape(catName)}</span>
+            <ul class="det-list">${rows}</ul>
+            ${sel.note ? `<div class="det-note">📝 ${escape(sel.note)}</div>` : ''}
+          </div>
+        `;
+      }
+    }
+    return `
+      <div class="id-menu">
+        <span class="label">메뉴</span>
+        ${escape(order.menu)}
+      </div>
+    `;
+  }
+
+  // Renders structured detail on dark surface (for acting order list and my-orders rows)
+  function renderOrderDetailDark(order) {
+    const sel = order.selection;
+    if (order.meal_type === 'breakfast' && sel) {
+      if (sel.meal_form === 'kimbap') {
+        return `
+          <div class="struct-mini">
+            <div class="struct-cat">🍙 ${escape(sel.kimbap_choice || '')}</div>
+            ${sel.note ? `<div class="struct-note">📝 ${escape(sel.note)}</div>` : ''}
+          </div>
+        `;
+      }
+      if (sel.meal_form === 'snack_pick') {
+        const prios = Array.isArray(sel.category_priorities) ? sel.category_priorities : [];
+        const tiersHtml = prios.map((cc, i) => {
+          const slotParts = (cc.slots || []).filter(s => !s.fixed).map(s => {
+            const pri = Array.isArray(s.priority) ? s.priority : [];
+            const priHtml = pri.map((v, j) => `<span class="d-pri"><span class="d-rank">${j+1}</span>${escape(v)}</span>`).join('');
+            const anyHtml = s.any ? `<span class="d-any">아무거나</span>` : '';
+            return `<div class="d-row"><span class="d-name">${escape(s.slot_name)}:</span> ${priHtml}${anyHtml}</div>`;
+          }).join('');
+          return `
+            <div class="tier-mini ${i === 0 ? 'primary' : 'secondary'}">
+              <div class="tier-mini-head"><span class="tier-mini-rank">${i+1}</span> <strong>${escape(cc.category_name || '')}</strong></div>
+              ${slotParts}
+            </div>
+          `;
+        }).join('');
+        const fallbackHtml = sel.fallback_any
+          ? `<div class="struct-fallback">🎲 다 없으면 아무거나 OK</div>`
+          : '';
+        return `
+          <div class="struct-mini">
+            <div class="struct-cat">[스낵픽]</div>
+            ${tiersHtml}
+            ${fallbackHtml}
+            ${sel.note ? `<div class="struct-note">📝 ${escape(sel.note)}</div>` : ''}
+          </div>
+        `;
+      }
+      // Legacy
+      if (Array.isArray(sel.slots)) {
+        const rows = sel.slots.filter(s => !s.fixed).map(s => {
+          const pri = Array.isArray(s.priority) ? s.priority : [];
+          const priHtml = pri.map((v, i) => `<span class="d-pri"><span class="d-rank">${i+1}</span>${escape(v)}</span>`).join('');
+          const anyHtml = s.any ? `<span class="d-any">아무거나</span>` : '';
+          return `<div class="d-row"><span class="d-name">${escape(s.slot_name)}:</span> ${priHtml}${anyHtml}</div>`;
+        }).join('');
+        const fixed = sel.slots.filter(s => s.fixed).map(s => escape(s.fixed)).join(' · ');
+        return `
+          <div class="struct-mini">
+            <div class="struct-cat">[${escape(sel.category_name || '')}]</div>
+            ${rows}
+            ${fixed ? `<div class="struct-fixed">+ ${fixed}</div>` : ''}
+            ${sel.note ? `<div class="struct-note">📝 ${escape(sel.note)}</div>` : ''}
+          </div>
+        `;
+      }
+    }
+    return `<div class="order-menu">${escape(order.menu)}</div>`;
   }
 
   // ===== Order viewer (swipeable, used by acting & applicant) =====
@@ -781,10 +1463,7 @@
         </div>
         <div class="id-name">${escape(order.name || user.name)}</div>
         <div class="id-eid">사번 ${escape(order.employee_id || user.employee_id)}</div>
-        <div class="id-menu">
-          <span class="label">메뉴</span>
-          ${escape(order.menu)}
-        </div>
+        ${renderOrderDetailLight(order)}
         <div class="barcode-wrap">
           <svg class="barcode-svg"></svg>
         </div>
@@ -927,8 +1606,6 @@
 
   // ===== ADMIN =====
   async function renderAdmin() {
-    const items = adminItems.filter(i => i.meal_type === adminMealTab);
-
     root.innerHTML = `
       ${renderBrand()}
       <div class="topbar">
@@ -936,24 +1613,35 @@
         <button class="btn btn-ghost btn-sm" id="switchRole">역할 전환</button>
       </div>
       <p style="margin:4px 4px 16px;color:var(--muted);font-size:13px;">
-        메뉴 항목을 추가·삭제하거나 일시적으로 숨길 수 있어요. 신청자 화면에 즉시 반영됩니다.
+        조식은 카테고리·슬롯·옵션을, 야식은 메뉴 칩을 관리합니다.
       </p>
 
       <div class="tabs">
-        <button class="tab ${adminMealTab==='breakfast'?'active':''}" data-tab="breakfast">🍳 조식 메뉴</button>
+        <button class="tab ${adminMealTab==='breakfast'?'active':''}" data-tab="breakfast">🍳 조식 구조</button>
         <button class="tab ${adminMealTab==='late_night'?'active':''}" data-tab="late_night">🍜 야식 메뉴</button>
       </div>
 
+      <div id="adminBody"></div>
+    `;
+
+    $('#switchRole').addEventListener('click', () => { saveRole(null); render(); });
+    document.querySelectorAll('.tab').forEach(t =>
+      t.addEventListener('click', () => { adminMealTab = t.dataset.tab; renderAdmin(); }));
+
+    if (adminMealTab === 'breakfast') renderAdminBreakfast();
+    else renderAdminLateNight();
+  }
+
+  function renderAdminLateNight() {
+    const items = adminItems;
+    $('#adminBody').innerHTML = `
       <div class="section-title">
-        <h2>${mealLabel(adminMealTab)} 메뉴 (${items.filter(i=>i.active).length}개 활성)</h2>
+        <h2>야식 메뉴 (${items.filter(i=>i.active).length}개 활성)</h2>
       </div>
 
       <div class="admin-list">
         ${items.length === 0 ? `
-          <div class="empty">
-            <span class="empty-emoji">📭</span>
-            아직 등록된 메뉴가 없습니다
-          </div>
+          <div class="empty"><span class="empty-emoji">📭</span>아직 등록된 메뉴가 없습니다</div>
         ` : items.map(it => `
           <div class="admin-row ${it.active ? '' : 'inactive'}">
             <div class="name">${escape(it.name)}</div>
@@ -963,29 +1651,20 @@
         `).join('')}
       </div>
 
-      <div class="section-title">
-        <h2>새 메뉴 추가</h2>
-      </div>
+      <div class="section-title"><h2>새 메뉴 추가</h2></div>
       <div class="add-row">
         <input class="input" id="newName" maxlength="50" placeholder="예: 컵라면" />
         <button class="btn btn-primary" id="addBtn">추가</button>
       </div>
-      <p class="muted-note">활성(보이기) 상태인 항목만 신청자에게 보입니다. 사용 안하는 메뉴는 숨기거나 삭제하세요.</p>
+      <p class="muted-note">활성 상태인 항목만 신청자에게 보입니다.</p>
     `;
-
-    $('#switchRole').addEventListener('click', () => { saveRole(null); render(); });
-
-    document.querySelectorAll('.tab').forEach(t =>
-      t.addEventListener('click', () => { adminMealTab = t.dataset.tab; renderAdmin(); }));
 
     document.querySelectorAll('[data-toggle]').forEach(b =>
       b.addEventListener('click', async () => {
         const id = Number(b.dataset.toggle);
         const newActive = b.dataset.active !== '1';
         try {
-          await api(`/api/menu-items/${id}`, {
-            method: 'PATCH', body: JSON.stringify({ active: newActive })
-          });
+          await api(`/api/menu-items/${id}`, { method: 'PATCH', body: JSON.stringify({ active: newActive }) });
           await loadAdminItems();
           renderAdmin();
         } catch (e) { toast(e.message); }
@@ -994,8 +1673,7 @@
     document.querySelectorAll('[data-del]').forEach(b =>
       b.addEventListener('click', async () => {
         const id = Number(b.dataset.del);
-        const name = b.dataset.name;
-        if (!confirm(`"${name}" 메뉴를 삭제할까요? (기존 신청 내용에는 영향 없음)`)) return;
+        if (!confirm(`"${b.dataset.name}" 메뉴를 삭제할까요?`)) return;
         try {
           await api(`/api/menu-items/${id}`, { method: 'DELETE' });
           toast('삭제되었습니다');
@@ -1009,10 +1687,7 @@
       const name = input.value.trim();
       if (!name) { toast('메뉴 이름을 입력해주세요'); return; }
       try {
-        await api('/api/menu-items', {
-          method: 'POST',
-          body: JSON.stringify({ meal_type: adminMealTab, name })
-        });
+        await api('/api/menu-items', { method: 'POST', body: JSON.stringify({ meal_type: 'late_night', name }) });
         toast('추가되었습니다');
         input.value = '';
         await loadAdminItems();
@@ -1021,6 +1696,243 @@
     }
     $('#addBtn').addEventListener('click', addMenu);
     input.addEventListener('keydown', e => { if (e.key === 'Enter') addMenu(); });
+  }
+
+  function renderAdminBreakfast() {
+    const cats = breakfastStructure;
+    $('#adminBody').innerHTML = `
+      <div class="section-title">
+        <h2>스낵픽 카테고리 (${cats.filter(c=>c.active).length}개 활성)</h2>
+      </div>
+
+      <div class="cat-edit-list">
+        ${cats.length === 0 ? `
+          <div class="empty"><span class="empty-emoji">📭</span>아직 등록된 카테고리가 없습니다</div>
+        ` : cats.map(c => renderAdminCategoryRow(c)).join('')}
+      </div>
+
+      <div class="section-title"><h2>새 카테고리 추가</h2></div>
+      <div class="add-row">
+        <input class="input" id="newCatEmoji" style="max-width:80px;" maxlength="4" placeholder="🍽️" />
+        <input class="input" id="newCatName" maxlength="30" placeholder="예: 죽" />
+        <button class="btn btn-primary" id="addCatBtn">추가</button>
+      </div>
+      <p class="muted-note">카테고리 추가 후, 각 카테고리 안에서 슬롯(메인/음료/계란 등)을 정의하세요.</p>
+
+      <div class="section-title" style="margin-top:32px;">
+        <h2>🍙 김밥/주먹밥 옵션 (${kimbapOptions.filter(k=>k.active).length}개 활성)</h2>
+      </div>
+      <p class="muted-note" style="margin-bottom:10px;">요일별로 바뀌는 김밥/주먹밥 메뉴를 추가·삭제하세요.</p>
+      <div class="admin-list">
+        ${kimbapOptions.length === 0 ? `
+          <div class="empty"><span class="empty-emoji">📭</span>등록된 항목이 없습니다</div>
+        ` : kimbapOptions.map(k => `
+          <div class="admin-row ${k.active ? '' : 'inactive'}">
+            <div class="name">${escape(k.name)}</div>
+            <button data-kimbap-toggle="${k.id}" data-active="${k.active}">${k.active ? '숨기기' : '보이기'}</button>
+            <button class="del" data-kimbap-del="${k.id}" data-name="${escape(k.name)}">삭제</button>
+          </div>
+        `).join('')}
+      </div>
+      <div class="add-row" style="margin-top:10px;">
+        <input class="input" id="newKimbapName" maxlength="30" placeholder="예: 참치김밥" />
+        <button class="btn btn-primary" id="addKimbapBtn">추가</button>
+      </div>
+    `;
+
+    // Toggle expand
+    document.querySelectorAll('[data-cat-expand]').forEach(b =>
+      b.addEventListener('click', () => {
+        const id = Number(b.dataset.catExpand);
+        if (adminBreakfastExpanded.has(id)) adminBreakfastExpanded.delete(id);
+        else adminBreakfastExpanded.add(id);
+        renderAdminBreakfast();
+      }));
+
+    document.querySelectorAll('[data-cat-toggle]').forEach(b =>
+      b.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const id = Number(b.dataset.catToggle);
+        const newActive = b.dataset.active !== '1';
+        try {
+          await api(`/api/categories/${id}`, { method: 'PATCH', body: JSON.stringify({ active: newActive }) });
+          await loadBreakfastStructure({ include_inactive: true });
+          renderAdminBreakfast();
+        } catch (e) { toast(e.message); }
+      }));
+
+    document.querySelectorAll('[data-cat-del]').forEach(b =>
+      b.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const id = Number(b.dataset.catDel);
+        if (!confirm(`"${b.dataset.name}" 카테고리와 모든 슬롯을 삭제할까요?`)) return;
+        try {
+          await api(`/api/categories/${id}`, { method: 'DELETE' });
+          toast('삭제되었습니다');
+          adminBreakfastExpanded.delete(id);
+          await loadBreakfastStructure({ include_inactive: true });
+          renderAdminBreakfast();
+        } catch (e) { toast(e.message); }
+      }));
+
+    document.querySelectorAll('[data-slot-del]').forEach(b =>
+      b.addEventListener('click', async () => {
+        const id = Number(b.dataset.slotDel);
+        if (!confirm(`"${b.dataset.name}" 슬롯을 삭제할까요?`)) return;
+        try {
+          await api(`/api/slots/${id}`, { method: 'DELETE' });
+          toast('삭제되었습니다');
+          await loadBreakfastStructure({ include_inactive: true });
+          renderAdminBreakfast();
+        } catch (e) { toast(e.message); }
+      }));
+
+    document.querySelectorAll('[data-add-slot]').forEach(b =>
+      b.addEventListener('click', async () => {
+        const catId = Number(b.dataset.addSlot);
+        const wrap = b.closest('.cat-edit-card');
+        const name = wrap.querySelector('[data-slot-name]').value.trim();
+        const isFixed = wrap.querySelector('[data-slot-fixed]').checked;
+        const fixedText = wrap.querySelector('[data-slot-fixed-text]').value.trim();
+        const optsRaw = wrap.querySelector('[data-slot-opts]').value.trim();
+        if (!name) { toast('슬롯 이름을 입력해주세요'); return; }
+        const body = { category_id: catId, name, is_fixed: isFixed };
+        if (isFixed) body.fixed_text = fixedText || name;
+        else {
+          const options = optsRaw.split(/[,\n]/).map(s => s.trim()).filter(Boolean);
+          if (options.length === 0) { toast('옵션을 한 개 이상 입력해주세요'); return; }
+          body.options = options;
+        }
+        try {
+          await api('/api/slots', { method: 'POST', body: JSON.stringify(body) });
+          toast('슬롯 추가됨');
+          await loadBreakfastStructure({ include_inactive: true });
+          renderAdminBreakfast();
+        } catch (e) { toast(e.message); }
+      }));
+
+    document.querySelectorAll('[data-slot-fixed]').forEach(cb =>
+      cb.addEventListener('change', (e) => {
+        const wrap = e.target.closest('.cat-edit-card');
+        wrap.querySelector('[data-slot-opts-row]').style.display = e.target.checked ? 'none' : '';
+        wrap.querySelector('[data-slot-fixed-row]').style.display = e.target.checked ? '' : 'none';
+      }));
+
+    // Add category
+    const catNameInput = $('#newCatName');
+    const catEmojiInput = $('#newCatEmoji');
+    async function addCat() {
+      const name = catNameInput.value.trim();
+      if (!name) { toast('카테고리 이름을 입력해주세요'); return; }
+      try {
+        await api('/api/categories', { method: 'POST', body: JSON.stringify({ name, emoji: catEmojiInput.value.trim() }) });
+        toast('카테고리 추가됨');
+        catNameInput.value = ''; catEmojiInput.value = '';
+        await loadBreakfastStructure({ include_inactive: true });
+        renderAdminBreakfast();
+      } catch (e) { toast(e.message); }
+    }
+    $('#addCatBtn').addEventListener('click', addCat);
+    catNameInput.addEventListener('keydown', e => { if (e.key === 'Enter') addCat(); });
+
+    // Kimbap handlers
+    document.querySelectorAll('[data-kimbap-toggle]').forEach(b =>
+      b.addEventListener('click', async () => {
+        const id = Number(b.dataset.kimbapToggle);
+        const newActive = b.dataset.active !== '1';
+        try {
+          await api(`/api/kimbap-options/${id}`, { method: 'PATCH', body: JSON.stringify({ active: newActive }) });
+          await loadKimbapOptions({ include_inactive: true });
+          renderAdminBreakfast();
+        } catch (e) { toast(e.message); }
+      }));
+    document.querySelectorAll('[data-kimbap-del]').forEach(b =>
+      b.addEventListener('click', async () => {
+        const id = Number(b.dataset.kimbapDel);
+        if (!confirm(`"${b.dataset.name}" 을(를) 삭제할까요?`)) return;
+        try {
+          await api(`/api/kimbap-options/${id}`, { method: 'DELETE' });
+          toast('삭제되었습니다');
+          await loadKimbapOptions({ include_inactive: true });
+          renderAdminBreakfast();
+        } catch (e) { toast(e.message); }
+      }));
+    const kbInput = $('#newKimbapName');
+    async function addKb() {
+      const name = kbInput.value.trim();
+      if (!name) { toast('이름을 입력해주세요'); return; }
+      try {
+        await api('/api/kimbap-options', { method: 'POST', body: JSON.stringify({ name }) });
+        toast('추가되었습니다');
+        kbInput.value = '';
+        await loadKimbapOptions({ include_inactive: true });
+        renderAdminBreakfast();
+      } catch (e) { toast(e.message); }
+    }
+    $('#addKimbapBtn').addEventListener('click', addKb);
+    kbInput.addEventListener('keydown', e => { if (e.key === 'Enter') addKb(); });
+  }
+
+  function renderAdminCategoryRow(c) {
+    const open = adminBreakfastExpanded.has(c.id);
+    const slots = c.slots || [];
+    const summary = slots.length === 0 ? '슬롯 없음'
+      : slots.map(s => s.is_fixed ? `${s.name}=${s.fixed_text}` : `${s.name}: ${(s.options || []).join('/')}`).join(' · ');
+    return `
+      <div class="cat-edit-card ${c.active ? '' : 'inactive'}">
+        <div class="cat-edit-head" data-cat-expand="${c.id}">
+          <span class="emoji">${c.emoji || '🍽️'}</span>
+          <div class="cat-edit-text">
+            <div class="cat-edit-name">${escape(c.name)} ${c.active ? '' : '<span class="cat-hidden">(숨김)</span>'}</div>
+            <div class="cat-edit-sub">${escape(summary)}</div>
+          </div>
+          <div class="cat-edit-actions">
+            <button class="btn-sm btn-ghost" data-cat-toggle="${c.id}" data-active="${c.active ? 1 : 0}">${c.active ? '숨기기' : '보이기'}</button>
+            <button class="btn-sm btn-ghost" data-cat-del="${c.id}" data-name="${escape(c.name)}">삭제</button>
+            <span class="cat-expand-arrow">${open ? '▾' : '▸'}</span>
+          </div>
+        </div>
+
+        ${open ? `
+          <div class="cat-edit-body">
+            <div class="slot-edit-list">
+              ${slots.length === 0 ? `<p class="muted-note">슬롯이 없습니다. 아래에서 추가하세요.</p>` :
+                slots.map(s => `
+                  <div class="slot-edit-row">
+                    <div class="slot-edit-info">
+                      <strong>${escape(s.name)}</strong>
+                      ${s.is_fixed
+                        ? `<span class="slot-edit-tag">고정: ${escape(s.fixed_text || s.name)}</span>`
+                        : `<span class="slot-edit-tag">옵션: ${(s.options || []).map(escape).join(', ')}</span>`}
+                    </div>
+                    <button class="btn-sm btn-ghost" data-slot-del="${s.id}" data-name="${escape(s.name)}">삭제</button>
+                  </div>
+                `).join('')}
+            </div>
+
+            <div class="slot-add-form">
+              <div class="slot-add-title">새 슬롯 추가</div>
+              <div class="field" style="margin-bottom:8px;">
+                <input class="input" data-slot-name placeholder="슬롯 이름 (예: 음료)" maxlength="30" />
+              </div>
+              <label class="check-label">
+                <input type="checkbox" data-slot-fixed />
+                <span>고정 항목 (사용자가 선택 안함, 항상 같이 제공)</span>
+              </label>
+              <div class="field" data-slot-opts-row style="margin-top:8px;margin-bottom:0;">
+                <label>옵션 (쉼표 또는 줄바꿈으로 구분)</label>
+                <textarea class="textarea" data-slot-opts maxlength="300" placeholder="예: 우유, 두유" style="min-height:60px;"></textarea>
+              </div>
+              <div class="field" data-slot-fixed-row style="margin-top:8px;margin-bottom:0;display:none;">
+                <label>고정 표시 텍스트</label>
+                <input class="input" data-slot-fixed-text maxlength="50" placeholder="예: 계란 2개" />
+              </div>
+              <button class="btn btn-primary" data-add-slot="${c.id}" style="margin-top:10px;">+ 슬롯 추가</button>
+            </div>
+          </div>
+        ` : ''}
+      </div>
+    `;
   }
 
   // ===== Data loaders =====
@@ -1046,8 +1958,20 @@
       }
     } catch { menuItemsCache = { breakfast: [], late_night: [] }; }
   }
+  async function loadBreakfastStructure({ include_inactive = false } = {}) {
+    try {
+      const qs = include_inactive ? '?include_inactive=1' : '';
+      breakfastStructure = await api('/api/breakfast-structure' + qs);
+    } catch { breakfastStructure = []; }
+  }
+  async function loadKimbapOptions({ include_inactive = false } = {}) {
+    try {
+      const qs = include_inactive ? '?include_inactive=1' : '';
+      kimbapOptions = await api('/api/kimbap-options' + qs);
+    } catch { kimbapOptions = []; }
+  }
   async function loadAdminItems() {
-    try { adminItems = await api('/api/menu-items?include_inactive=1'); }
+    try { adminItems = await api('/api/menu-items?include_inactive=1&meal_type=late_night'); }
     catch { adminItems = []; }
   }
 
@@ -1104,7 +2028,7 @@
     if (!role) { renderRolePicker(); return; }
 
     if (role === 'applicant') {
-      await Promise.all([loadMyOrders(), loadMenuItems()]);
+      await Promise.all([loadMyOrders(), loadMenuItems(), loadBreakfastStructure(), loadKimbapOptions()]);
       renderApplicant();
       startPolling();
     } else if (role === 'acting') {
@@ -1116,7 +2040,11 @@
       renderActing();
       startPolling();
     } else if (role === 'admin') {
-      await loadAdminItems();
+      await Promise.all([
+        loadAdminItems(),
+        loadBreakfastStructure({ include_inactive: true }),
+        loadKimbapOptions({ include_inactive: true })
+      ]);
       renderAdmin();
     }
   }
