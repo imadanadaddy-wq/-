@@ -965,6 +965,11 @@ app.post('/api/admin/cleanup', (req, res) => {
 
 app.get('/health', (req, res) => res.json({ ok: true }));
 
+// Pretty URL for the user guide
+app.get('/guide', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'guide.html'));
+});
+
 app.listen(PORT, () => {
   console.log(`KNUH Meal Dashboard listening on :${PORT}`);
   console.log(`DB: ${DB_PATH}`);

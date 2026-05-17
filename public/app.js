@@ -187,6 +187,9 @@
         </div>
         <button class="btn btn-primary" id="loginBtn">등록하고 시작하기</button>
       </div>
+      <p style="text-align:center;margin-top:14px;font-size:12px;color:var(--muted);">
+        처음 사용하시나요? <a href="/guide" style="color:var(--text-soft);text-decoration:underline;">사용 가이드 보기 →</a>
+      </p>
     `;
     const eid = $('#eid'), nm = $('#nm'), btn = $('#loginBtn');
     eid.focus();
@@ -237,7 +240,8 @@
           </button>
         ` : ''}
       </div>
-      <div style="margin-top:20px;text-align:center;">
+      <div style="margin-top:20px;text-align:center;display:flex;gap:8px;justify-content:center;align-items:center;">
+        <a href="/guide" class="btn btn-ghost btn-sm" style="text-decoration:none;">📖 사용 가이드</a>
         <button class="btn btn-ghost btn-sm" id="logoutBtn">로그아웃</button>
       </div>
     `;
