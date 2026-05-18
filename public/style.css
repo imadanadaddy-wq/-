@@ -2148,3 +2148,113 @@ input, textarea { font-family: inherit; }
   color: var(--text-soft);
   line-height: 1.5;
 }
+
+/* ===== Late-night priority chips (applicant menu picker) ===== */
+.ln-priority-hint {
+  font-size: 12px;
+  color: var(--muted);
+  margin: 6px 0 10px;
+  line-height: 1.5;
+}
+.menu-chip.ln-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  position: relative;
+  padding-left: 10px;
+}
+.menu-chip.ln-chip.selected {
+  background: var(--late-night, #7c5dfa);
+  border-color: var(--late-night, #7c5dfa);
+  color: #fff;
+  font-weight: 700;
+}
+.ln-chip-rank {
+  display: inline-grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: rgba(255,255,255,0.25);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+/* ===== Acting card: late-night quick-pickup variant ===== */
+.order-card.with-quick {
+  display: flex;
+  align-items: stretch;
+  padding: 0;
+  overflow: hidden;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  margin-bottom: 6px;
+}
+.order-card.with-quick .order-main {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 4px 10px 12px;
+  cursor: default;
+}
+.quick-pickup {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  background: var(--late-night, #7c5dfa);
+  color: #fff;
+  border: none;
+  padding: 0 14px;
+  min-width: 74px;
+  cursor: pointer;
+  font-family: inherit;
+  font-weight: 700;
+  transition: background .15s, transform .05s;
+  align-self: stretch;
+}
+.quick-pickup:hover { background: #6c4eea; }
+.quick-pickup:active { transform: scale(0.97); }
+.quick-pickup:disabled { opacity: 0.6; cursor: not-allowed; }
+.qp-check { font-size: 22px; line-height: 1; }
+.qp-text { font-size: 11px; line-height: 1.2; text-align: center; }
+
+/* Brief feedback animation when pressed */
+.order-card.picking-up { animation: pickupFade .4s ease-out forwards; }
+@keyframes pickupFade {
+  0% { background: rgba(34,197,94,0.25); }
+  100% { background: transparent; opacity: 0; transform: scale(0.96); }
+}
+
+/* Standard (non-quick) cards: keep button-style click area on the whole thing */
+.order-card:not(.with-quick) {
+  cursor: pointer;
+}
+.order-card:not(.with-quick) .order-main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+}
+
+/* Late-night viewer block (applicant own barcode replacement) */
+.late-night-menu-block {
+  background: #fafafa;
+  border-radius: 12px;
+  padding: 18px;
+  margin: 14px 0 6px;
+  border-left: 4px solid var(--late-night, #7c5dfa);
+}
+.ln-viewer-label {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #888;
+  margin-bottom: 8px;
+}

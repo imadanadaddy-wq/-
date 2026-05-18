@@ -19,8 +19,9 @@
   let applicantStep = 'home';      // 'home' | 'date' | 'menu' | 'done'
   let draftMealType = null;
   let draftDates = [];
-  let draftMenuName = '';
+  let draftMenuName = '';                // legacy, kept for backward compat (unused for new flow)
   let draftCustomText = '';
+  let draftLnPriority = [];              // late_night: array of menu names in priority order (max 3)
 
   // Breakfast draft
   let bfStep = null;               // null | 'form' | 'kimbap' | 'cat1' | 'tier' | 'fallback' | 'note'
@@ -397,6 +398,7 @@
         draftDates = [todayStr()];
         draftMenuName = '';
         draftCustomText = '';
+        draftLnPriority = [];
         resetBreakfastDraft();
         applicantStep = 'date';
         renderApplicantStep();
@@ -612,25 +614,38 @@
               <span style="font-size:11px;color:var(--muted);">직접 입력으로 신청 가능합니다</span>
             </div>
           ` : `
+            <p class="ln-priority-hint">
+              ${draftLnPriority.length === 0
+                ? '메뉴를 탭하면 1순위로 추가됩니다. 다른 메뉴를 추가로 탭하면 2·3순위로 추가돼요 (최대 3개)'
+                : `${draftLnPriority.length}개 선택됨${draftLnPriority.length >= 3 ? ' · 최대 도달' : ' · 더 추가하려면 다른 메뉴 탭'}`}
+            </p>
             <div class="menu-grid">
-              ${items.map(it => `
-                <button class="menu-chip ${draftMenuName===it.name?'selected':''}" data-menu="${escape(it.name)}">
-                  ${escape(it.name)}
-                </button>
-              `).join('')}
+              ${items.map(it => {
+                const idx = draftLnPriority.indexOf(it.name);
+                const isSel = idx >= 0;
+                const rank = idx + 1;
+                return `
+                  <button class="menu-chip ln-chip ${isSel ? 'selected' : ''}" data-menu="${escape(it.name)}">
+                    ${isSel ? `<span class="ln-chip-rank">${rank}</span>` : ''}
+                    <span>${escape(it.name)}</span>
+                  </button>
+                `;
+              }).join('')}
             </div>
           `}
 
           <div class="field" style="margin-top:14px;margin-bottom:0;">
             <label for="menuInput">직접 입력 (선택)</label>
             <textarea class="textarea" id="menuInput" maxlength="200"
-              placeholder="예: 컵라면, 안 매운걸로">${escape(draftCustomText)}</textarea>
+              placeholder="예: 안 매운걸로 / 채식">${escape(draftCustomText)}</textarea>
           </div>
         </div>
 
         <div class="step-action">
-          <button class="btn btn-primary" id="stepSubmit">
-            ${draftDates.length === 1 ? '신청하기' : `${draftDates.length}일 신청하기`}
+          <button class="btn btn-primary" id="stepSubmit" ${(draftLnPriority.length === 0 && !draftCustomText.trim()) ? 'disabled' : ''}>
+            ${(draftLnPriority.length === 0 && !draftCustomText.trim())
+              ? '메뉴를 선택해주세요'
+              : (draftDates.length === 1 ? '신청하기' : `${draftDates.length}일 신청하기`)}
           </button>
         </div>
       `;
@@ -639,8 +654,17 @@
 
       document.querySelectorAll('[data-menu]').forEach(b =>
         b.addEventListener('click', () => {
-          draftMenuName = b.dataset.menu;
-          draftCustomText = '';
+          const name = b.dataset.menu;
+          const i = draftLnPriority.indexOf(name);
+          if (i >= 0) {
+            draftLnPriority.splice(i, 1);
+          } else {
+            if (draftLnPriority.length >= 3) {
+              toast('최대 3개까지만 선택할 수 있어요');
+              return;
+            }
+            draftLnPriority.push(name);
+          }
           renderApplicantLateNightMenu();
         }));
 
@@ -648,18 +672,27 @@
       if (ta) {
         ta.addEventListener('input', () => {
           draftCustomText = ta.value;
-          if (draftCustomText && draftMenuName) {
-            draftMenuName = '';
-            document.querySelectorAll('.menu-chip.selected').forEach(c => c.classList.remove('selected'));
+          // Just re-enable the submit button label; no full re-render to keep focus
+          const btn = $('#stepSubmit');
+          if (btn) {
+            const hasAny = draftLnPriority.length > 0 || draftCustomText.trim();
+            btn.disabled = !hasAny;
+            btn.textContent = !hasAny
+              ? '메뉴를 선택해주세요'
+              : (draftDates.length === 1 ? '신청하기' : `${draftDates.length}일 신청하기`);
           }
         });
       }
 
       $('#stepSubmit').addEventListener('click', async () => {
         const taEl = $('#menuInput');
-        const menu = (draftCustomText || (taEl ? taEl.value : '') || '').trim() || draftMenuName;
-        if (!menu) { toast('메뉴를 선택하거나 입력해주세요'); return; }
-        await submitOrders({ menu });
+        const custom = ((taEl ? taEl.value : '') || draftCustomText || '').trim();
+        if (draftLnPriority.length === 0 && !custom) {
+          toast('메뉴를 선택하거나 입력해주세요'); return;
+        }
+        await submitOrders({
+          selection: { priority: draftLnPriority.slice(), custom },
+        });
       });
     });  // end of fetchLateNightMenuForDate().then(...)
   }
@@ -1302,6 +1335,7 @@
     draftDates = [];
     draftMenuName = '';
     draftCustomText = '';
+    draftLnPriority = [];
     resetBreakfastDraft();
     renderApplicantHome();
   }
@@ -1464,19 +1498,32 @@
           </div>
         ` : groups.map(g => `
           ${g.label ? `<div class="group-header">${g.label} <span class="group-count">${g.items.length}</span></div>` : ''}
-          ${g.items.map(o => `
-            <button class="order-card ${(o.selection && o.selection.meal_form === 'no_meal') ? 'no-meal' : ''}" data-id="${o.id}">
-              <div class="meal-badge ${o.meal_type}">${(o.selection && o.selection.meal_form === 'no_meal') ? '🙅‍♀️' : mealEmoji(o.meal_type)}</div>
-              <div class="order-body">
-                <div class="order-name">
-                  ${escape(o.name)}
-                  <span class="order-eid">${escape(o.employee_id)}</span>
+          ${g.items.map(o => {
+            const isNoMeal = o.selection && o.selection.meal_form === 'no_meal';
+            const isLateNight = o.meal_type === 'late_night';
+            const showQuickPickup = isLateNight && !isNoMeal;
+            return `
+              <div class="order-card ${isNoMeal ? 'no-meal' : ''} ${showQuickPickup ? 'with-quick' : ''}" data-card-id="${o.id}">
+                <div class="order-main" data-id="${o.id}">
+                  <div class="meal-badge ${o.meal_type}">${isNoMeal ? '🙅‍♀️' : mealEmoji(o.meal_type)}</div>
+                  <div class="order-body">
+                    <div class="order-name">
+                      ${escape(o.name)}
+                      <span class="order-eid">${escape(o.employee_id)}</span>
+                    </div>
+                    ${renderOrderDetailDark(o)}
+                  </div>
+                  ${showQuickPickup ? '' : '<div class="order-chevron">›</div>'}
                 </div>
-                ${renderOrderDetailDark(o)}
+                ${showQuickPickup ? `
+                  <button class="quick-pickup" data-quick-pickup="${o.id}" aria-label="수령 완료">
+                    <span class="qp-check">✓</span>
+                    <span class="qp-text">수령<br/>완료</span>
+                  </button>
+                ` : ''}
               </div>
-              <div class="order-chevron">›</div>
-            </button>
-          `).join('')}
+            `;
+          }).join('')}
         `).join('')}
       </div>
     `;
@@ -1497,7 +1544,7 @@
         renderActingList();
       }));
 
-    document.querySelectorAll('.order-card').forEach(c =>
+    document.querySelectorAll('.order-main').forEach(c =>
       c.addEventListener('click', () => {
         const id = Number(c.dataset.id);
         // Find the order
@@ -1514,7 +1561,11 @@
           });
           return;
         }
-        // For pickup-able orders, open viewer with the pickupable list (skip no_meal so swipe stays useful)
+        // Late-night: card body click is a no-op since the quick-pickup button handles it.
+        if (order.meal_type === 'late_night') {
+          return;
+        }
+        // Breakfast (snack_pick / kimbap): open barcode viewer
         const list = pickupableOrders;
         const startIdx = list.findIndex(o => o.id === id);
         if (startIdx >= 0) {
@@ -1525,6 +1576,29 @@
               renderActing();
             }
           });
+        }
+      }));
+
+    // Late-night quick-pickup button: pick up directly without opening modal
+    document.querySelectorAll('[data-quick-pickup]').forEach(b =>
+      b.addEventListener('click', async (ev) => {
+        ev.stopPropagation();
+        const id = Number(b.dataset.quickPickup);
+        const order = activeOrders.find(o => o.id === id);
+        const name = order ? order.name : '';
+        b.disabled = true;
+        // Visual confirmation: card briefly turns green
+        const card = b.closest('.order-card');
+        if (card) card.classList.add('picking-up');
+        try {
+          await api(`/api/orders/${id}/pickup`, { method: 'POST' });
+          if (name) toast(`✓ ${name} 수령 완료`);
+          await Promise.all([loadActiveOrders(), loadActiveSummary()]);
+          renderActing();
+        } catch (e) {
+          if (card) card.classList.remove('picking-up');
+          b.disabled = false;
+          toast(e.message);
         }
       }));
   }
@@ -1634,6 +1708,13 @@
           .map(s => s.priority.join('→')).join(' | ');
         return `${sel.category_name ? escape(sel.category_name) + ' · ' : ''}${parts}${sel.note ? ` 📝 ${escape(sel.note)}` : ''}`;
       }
+    }
+    if (order.meal_type === 'late_night' && sel && Array.isArray(sel.priority) && sel.priority.length > 0) {
+      const parts = sel.priority.map((name, i) =>
+        `<span class="vc-tier-chip ${i === 0 ? 'primary' : 'secondary'}">${i+1}순위 ${escape(name)}</span>`
+      ).join('');
+      const note = sel.custom ? ` <span class="vc-note">📝 ${escape(sel.custom)}</span>` : '';
+      return parts + note;
     }
     return escape(order.menu);
   }
@@ -1766,6 +1847,18 @@
         return `<div class="order-menu compact">${catLabel}${parts}${sel.note ? ` 📝${escape(sel.note)}` : ''}</div>`;
       }
     }
+    // Late-night with priority selection
+    if (order.meal_type === 'late_night' && sel && Array.isArray(sel.priority) && sel.priority.length > 0) {
+      const rows = sel.priority.map((name, i) =>
+        `<span class="d-pri"><span class="d-rank">${i+1}</span>${escape(name)}</span>`
+      ).join('');
+      return `
+        <div class="struct-mini">
+          ${rows ? `<div class="d-row" style="flex-wrap:wrap;gap:4px;">${rows}</div>` : ''}
+          ${sel.custom ? `<div class="struct-note">📝 ${escape(sel.custom)}</div>` : ''}
+        </div>
+      `;
+    }
     return `<div class="order-menu">${escape(order.menu)}</div>`;
   }
 
@@ -1824,7 +1917,8 @@
         <div class="vc-eid">사번 ${escape(order.employee_id || user.employee_id)}</div>
         ${isLateNight ? `
           <div class="late-night-menu-block">
-            <div class="late-night-menu-text">${escape(order.menu || '')}</div>
+            <div class="ln-viewer-label">야식 메뉴</div>
+            <div class="vc-menu-summary">${renderMenuOneLine(order)}</div>
           </div>
         ` : `
           <div class="barcode-wrap">
@@ -2692,6 +2786,11 @@
       const prios = Array.isArray(sel.category_priorities) ? sel.category_priorities : [];
       const summary = prios.map((cc, i) => `${i+1}순위 ${escape(cc.category_name || '')}`).join(' → ');
       return `🥣 ${summary}${sel.fallback_any ? ' → 🎲' : ''}${sel.note ? ` · 📝 ${escape(sel.note)}` : ''}`;
+    }
+    // Late-night with priority selection
+    if (Array.isArray(sel.priority) && sel.priority.length > 0) {
+      const summary = sel.priority.map((name, i) => `${i+1}순위 ${escape(name)}`).join(' → ');
+      return `🍜 ${summary}${sel.custom ? ` · 📝 ${escape(sel.custom)}` : ''}`;
     }
     return escape(o.menu || '');
   }

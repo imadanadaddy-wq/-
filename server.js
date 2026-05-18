@@ -1024,6 +1024,48 @@ app.delete('/api/kimbap-options/:id', (req, res) => {
 // Single-date create or update.
 // For breakfast: requires { selection: {...} }. menu is derived.
 // For late_night: requires { menu: "..." }.
+// Validate & normalize a late-night selection.
+// schema: { priority: ['메뉴1','메뉴2','메뉴3'], custom: '...' } — both fields optional, but at least one must be non-empty
+function validateLateNightSelection(input, fallbackMenu) {
+  // Legacy: if no selection provided but menu given, fall back to simple menu-only
+  if (!input || typeof input !== 'object') {
+    const m = String(fallbackMenu || '').trim();
+    if (!m) return { error: '메뉴를 입력해주세요' };
+    if (m.length > 200) return { error: '메뉴가 너무 깁니다 (200자 이하)' };
+    return { selection: null, menu: m };
+  }
+
+  let priority = Array.isArray(input.priority) ? input.priority.map(s => String(s || '').trim()).filter(Boolean) : [];
+  // Dedup preserving order
+  priority = [...new Set(priority)];
+  if (priority.length > 3) return { error: '순위는 최대 3개까지 가능합니다' };
+  for (const p of priority) {
+    if (p.length > 100) return { error: '메뉴 이름이 너무 깁니다' };
+  }
+  const custom = typeof input.custom === 'string' ? input.custom.trim().slice(0, 200) : '';
+
+  if (priority.length === 0 && !custom) {
+    return { error: '메뉴를 한 개 이상 선택하거나 직접 입력해주세요' };
+  }
+
+  // Build human-readable menu string
+  let menu = '';
+  if (priority.length === 1) {
+    menu = priority[0];
+  } else if (priority.length > 1) {
+    menu = priority.map((v, i) => `${i+1}순위 ${v}`).join(' → ');
+  }
+  if (custom) {
+    menu = menu ? `${menu} · ${custom}` : custom;
+  }
+  if (menu.length > 200) menu = menu.slice(0, 197) + '...';
+
+  return {
+    selection: { priority, custom },
+    menu,
+  };
+}
+
 app.post('/api/orders', (req, res) => {
   const user = requireUser(req, res);
   if (!user) return;
@@ -1047,9 +1089,10 @@ app.post('/api/orders', (req, res) => {
     selectionJSON = JSON.stringify(v.selection);
     menu = v.menu;
   } else {
-    menu = String(menu || '').trim();
-    if (!menu) return res.status(400).json({ error: '메뉴를 입력해주세요' });
-    if (menu.length > 200) return res.status(400).json({ error: '메뉴가 너무 깁니다 (200자 이하)' });
+    const v = validateLateNightSelection(selection, menu);
+    if (v.error) return res.status(400).json({ error: v.error });
+    if (v.selection) selectionJSON = JSON.stringify(v.selection);
+    menu = v.menu;
   }
 
   const existing = db.prepare(`
@@ -1098,9 +1141,10 @@ app.post('/api/orders/batch', (req, res) => {
     selectionJSON = JSON.stringify(v.selection);
     menu = v.menu;
   } else {
-    menu = String(menu || '').trim();
-    if (!menu) return res.status(400).json({ error: '메뉴를 입력해주세요' });
-    if (menu.length > 200) return res.status(400).json({ error: '메뉴가 너무 깁니다 (200자 이하)' });
+    const v = validateLateNightSelection(selection, menu);
+    if (v.error) return res.status(400).json({ error: v.error });
+    if (v.selection) selectionJSON = JSON.stringify(v.selection);
+    menu = v.menu;
   }
 
   const findStmt = db.prepare(`
