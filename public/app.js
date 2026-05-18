@@ -55,6 +55,12 @@
   let kimbapOptions = [];
 
   let menuItemsCache = { breakfast: [], late_night: [] };
+  // For late_night: keyed by date → { items, period, is_holiday, kind }
+  let lateNightMenuByDate = {};
+  // Holidays cache (Set of YYYY-MM-DD)
+  let holidaysSet = new Set();
+  // Late-night menu periods (admin manages)
+  let menuPeriods = [];
 
   // ===== Storage =====
   function loadStored() {
@@ -272,6 +278,7 @@
           const isToday = d === today;
           const dow = dayOfWeek(d);
           const dt = new Date(d + 'T00:00:00');
+          const isHoliday = holidaysSet.has(d);
           const cls = [
             'date-chip',
             isSel ? 'selected' : '',
@@ -279,11 +286,13 @@
             dow === 0 ? 'sun' : '',
             dow === 6 ? 'sat' : '',
             withOrdersDates.has(d) ? 'has-orders' : '',
+            isHoliday ? 'holiday' : '',
           ].filter(Boolean).join(' ');
           return `
-            <button class="${cls}" data-date="${d}">
+            <button class="${cls}" data-date="${d}" title="${isHoliday ? '매장 휴무일' : ''}">
               <span class="dow">${DOW_KR[dow]}</span>
               <span class="day">${dt.getDate()}</span>
+              ${isHoliday ? '<span class="holiday-mark">휴</span>' : ''}
             </button>
           `;
         }).join('')}
@@ -490,72 +499,169 @@
     return renderApplicantLateNightMenu();
   }
 
+  async function fetchLateNightMenuForDate(date) {
+    if (lateNightMenuByDate[date]) return lateNightMenuByDate[date];
+    try {
+      const r = await api(`/api/menu-items?meal_type=late_night&date=${encodeURIComponent(date)}`);
+      lateNightMenuByDate[date] = r;
+      return r;
+    } catch (e) {
+      return { period: null, kind: 'weekday', is_holiday: false, items: [] };
+    }
+  }
+
   function renderApplicantLateNightMenu() {
-    const items = menuItemsCache.late_night || [];
+    // Pre-flight check: do all selected dates share the same kind (weekday vs holiday)?
+    // If mixed, ask the user to split the request.
+    const kinds = new Set(draftDates.map(d => holidaysSet.has(d) ? 'holiday' : 'weekday'));
+    const mixed = kinds.size > 1;
+
     const dateLabel = draftDates.length === 1
       ? fmtFull(draftDates[0])
       : `${draftDates.length}일 (${draftDates.map(d => fmtDate(d, { withDow: false })).join(', ')})`;
 
+    if (mixed) {
+      const holidayDates = draftDates.filter(d => holidaysSet.has(d));
+      const weekdayDates = draftDates.filter(d => !holidaysSet.has(d));
+      root.innerHTML = `
+        ${renderBrand()}
+        ${applicantHeader(`🍜 야식 신청`, { onBack: true, step: 2, totalSteps: 3 })}
+        <div class="card step-card">
+          <h2 class="step-h">⚠️ 휴무일이 섞여있어요</h2>
+          <p class="step-desc">선택한 날짜에 매장 휴무일과 상시일이 함께 있어 메뉴가 다릅니다. 분리해서 신청해주세요.</p>
+          <div class="ln-split-info">
+            <div class="ln-split-row">
+              <span class="ln-split-label">상시일</span>
+              <span class="ln-split-dates">${weekdayDates.map(d => fmtDate(d, { withDow: true })).join(', ')}</span>
+            </div>
+            <div class="ln-split-row holiday">
+              <span class="ln-split-label">매장 휴무일</span>
+              <span class="ln-split-dates">${holidayDates.map(d => fmtDate(d, { withDow: true })).join(', ')}</span>
+            </div>
+          </div>
+          <div class="step-action" style="margin-top:14px;">
+            <button class="btn btn-primary" id="splitToWeekday">${weekdayDates.length}일(상시) 먼저 신청</button>
+            <button class="btn" id="splitToHoliday" style="margin-top:6px;">${holidayDates.length}일(휴무일) 먼저 신청</button>
+          </div>
+        </div>
+      `;
+      $('#stepBack').addEventListener('click', () => { applicantStep = 'date'; renderApplicantStep(); });
+      $('#splitToWeekday').addEventListener('click', () => {
+        draftDates = weekdayDates;
+        renderApplicantLateNightMenu();
+      });
+      $('#splitToHoliday').addEventListener('click', () => {
+        draftDates = holidayDates;
+        renderApplicantLateNightMenu();
+      });
+      return;
+    }
+
+    // All dates share the same kind. Fetch menu for the first date (representative).
+    const repDate = draftDates[0];
+    const isHoliday = holidaysSet.has(repDate);
+
+    // Show loading state then re-render with items
     root.innerHTML = `
       ${renderBrand()}
       ${applicantHeader(`🍜 야식 신청`, { onBack: true, step: 2, totalSteps: 3 })}
-
       <div class="card step-card">
-        <h2 class="step-h">메뉴 선택</h2>
-        <p class="step-desc">${escape(dateLabel)}</p>
-
-        ${items.length === 0 ? `
-          <div class="empty" style="margin-top:8px;">
-            <span class="empty-emoji">📭</span>
-            등록된 메뉴가 없습니다. 직접 입력으로 신청해주세요.
-          </div>
-        ` : `
-          <div class="menu-grid">
-            ${items.map(it => `
-              <button class="menu-chip ${draftMenuName===it.name?'selected':''}" data-menu="${escape(it.name)}">
-                ${escape(it.name)}
-              </button>
-            `).join('')}
-          </div>
-        `}
-
-        <div class="field" style="margin-top:14px;margin-bottom:0;">
-          <label for="menuInput">직접 입력 (선택)</label>
-          <textarea class="textarea" id="menuInput" maxlength="200"
-            placeholder="예: 컵라면, 안 매운걸로 / 죽 (전복죽 선호)">${escape(draftCustomText)}</textarea>
-        </div>
-      </div>
-
-      <div class="step-action">
-        <button class="btn btn-primary" id="stepSubmit">
-          ${draftDates.length === 1 ? '신청하기' : `${draftDates.length}일 신청하기`}
-        </button>
+        <h2 class="step-h">메뉴 불러오는 중...</h2>
       </div>
     `;
-
     $('#stepBack').addEventListener('click', () => { applicantStep = 'date'; renderApplicantStep(); });
 
-    document.querySelectorAll('[data-menu]').forEach(b =>
-      b.addEventListener('click', () => {
-        draftMenuName = b.dataset.menu;
-        draftCustomText = '';
-        renderApplicantLateNightMenu();
-      }));
+    fetchLateNightMenuForDate(repDate).then(menuInfo => {
+      const items = menuInfo.items || [];
+      const period = menuInfo.period;
 
-    const ta = $('#menuInput');
-    ta.addEventListener('input', () => {
-      draftCustomText = ta.value;
-      if (draftCustomText && draftMenuName) {
-        draftMenuName = '';
-        document.querySelectorAll('.menu-chip.selected').forEach(c => c.classList.remove('selected'));
+      root.innerHTML = `
+        ${renderBrand()}
+        ${applicantHeader(`🍜 야식 신청`, { onBack: true, step: 2, totalSteps: 3 })}
+
+        <div class="card step-card">
+          <h2 class="step-h">메뉴 선택</h2>
+          <p class="step-desc">${escape(dateLabel)}</p>
+
+          ${isHoliday ? `
+            <div class="ln-day-banner holiday">
+              <span class="ln-banner-emoji">🏪</span>
+              <div>
+                <div class="ln-banner-title">매장 휴무일</div>
+                <div class="ln-banner-sub">상시일과 메뉴 구성이 다릅니다 (보통 4종)</div>
+              </div>
+            </div>
+          ` : `
+            <div class="ln-day-banner">
+              <span class="ln-banner-emoji">🍽️</span>
+              <div>
+                <div class="ln-banner-title">상시일</div>
+                <div class="ln-banner-sub">평일 야식 메뉴 (보통 5종)</div>
+              </div>
+            </div>
+          `}
+
+          ${period ? `
+            <div class="ln-period-tag">${escape(period.label)} (${period.start_date.slice(5)} ~ ${period.end_date.slice(5)})</div>
+          ` : ''}
+
+          ${items.length === 0 ? `
+            <div class="empty" style="margin-top:14px;">
+              <span class="empty-emoji">📭</span>
+              ${period ? '이 기간에 등록된 메뉴가 없습니다' : '해당 날짜에 정의된 메뉴 기간이 없습니다'}<br/>
+              <span style="font-size:11px;color:var(--muted);">직접 입력으로 신청 가능합니다</span>
+            </div>
+          ` : `
+            <div class="menu-grid">
+              ${items.map(it => `
+                <button class="menu-chip ${draftMenuName===it.name?'selected':''}" data-menu="${escape(it.name)}">
+                  ${escape(it.name)}
+                </button>
+              `).join('')}
+            </div>
+          `}
+
+          <div class="field" style="margin-top:14px;margin-bottom:0;">
+            <label for="menuInput">직접 입력 (선택)</label>
+            <textarea class="textarea" id="menuInput" maxlength="200"
+              placeholder="예: 컵라면, 안 매운걸로">${escape(draftCustomText)}</textarea>
+          </div>
+        </div>
+
+        <div class="step-action">
+          <button class="btn btn-primary" id="stepSubmit">
+            ${draftDates.length === 1 ? '신청하기' : `${draftDates.length}일 신청하기`}
+          </button>
+        </div>
+      `;
+
+      $('#stepBack').addEventListener('click', () => { applicantStep = 'date'; renderApplicantStep(); });
+
+      document.querySelectorAll('[data-menu]').forEach(b =>
+        b.addEventListener('click', () => {
+          draftMenuName = b.dataset.menu;
+          draftCustomText = '';
+          renderApplicantLateNightMenu();
+        }));
+
+      const ta = $('#menuInput');
+      if (ta) {
+        ta.addEventListener('input', () => {
+          draftCustomText = ta.value;
+          if (draftCustomText && draftMenuName) {
+            draftMenuName = '';
+            document.querySelectorAll('.menu-chip.selected').forEach(c => c.classList.remove('selected'));
+          }
+        });
       }
-    });
 
-    $('#stepSubmit').addEventListener('click', async () => {
-      const menu = (draftCustomText || ta.value || '').trim() || draftMenuName;
-      if (!menu) { toast('메뉴를 선택하거나 입력해주세요'); return; }
-      await submitOrders({ menu });
-    });
+      $('#stepSubmit').addEventListener('click', async () => {
+        const taEl = $('#menuInput');
+        const menu = (draftCustomText || (taEl ? taEl.value : '') || '').trim() || draftMenuName;
+        if (!menu) { toast('메뉴를 선택하거나 입력해주세요'); return; }
+        await submitOrders({ menu });
+      });
+    });  // end of fetchLateNightMenuForDate().then(...)
   }
 
   function renderApplicantBreakfastMenu() {
@@ -2591,35 +2697,129 @@
   }
 
   function renderAdminLateNight() {
-    const items = adminItems;
+    // Group admin menu items by period_id
+    const itemsByPeriod = {};
+    const orphanItems = [];
+    for (const it of adminItems) {
+      if (it.period_id) {
+        (itemsByPeriod[it.period_id] = itemsByPeriod[it.period_id] || []).push(it);
+      } else {
+        orphanItems.push(it);
+      }
+    }
+
+    const periodsBlock = menuPeriods.length === 0 ? `
+      <div class="empty"><span class="empty-emoji">📭</span>등록된 기간이 없습니다. 아래에서 새로 추가하세요.</div>
+    ` : menuPeriods.map(p => renderPeriodCard(p, itemsByPeriod[p.id] || [])).join('');
+
+    const sortedHolidays = Array.from(holidaysSet).sort();
+
     $('#adminBody').innerHTML = `
       <div class="section-title">
-        <h2>야식 메뉴 (${items.filter(i=>i.active).length}개 활성)</h2>
+        <h2>야식 메뉴 기간 (${menuPeriods.filter(p=>p.active).length}개 활성)</h2>
+      </div>
+      <p class="muted-note" style="margin-bottom:10px;">
+        매 2주마다 메뉴가 바뀌니, 새 기간을 추가하고 그 기간의 메뉴 칩을 등록하세요.
+        같은 날짜에 상시(weekday)와 휴무일(holiday) 둘 다 정의하면 신청자가 알아서 매칭됩니다.
+      </p>
+
+      <div class="period-list">
+        ${periodsBlock}
       </div>
 
-      <div class="admin-list">
-        ${items.length === 0 ? `
-          <div class="empty"><span class="empty-emoji">📭</span>아직 등록된 메뉴가 없습니다</div>
-        ` : items.map(it => `
-          <div class="admin-row ${it.active ? '' : 'inactive'}">
-            <div class="name">${escape(it.name)}</div>
-            <button data-toggle="${it.id}" data-active="${it.active}">${it.active ? '숨기기' : '보이기'}</button>
-            <button class="del" data-del="${it.id}" data-name="${escape(it.name)}">삭제</button>
+      ${orphanItems.length > 0 ? `
+        <div class="period-card orphan">
+          <div class="period-head">
+            <span class="period-kind orphan">⚠️ 기간 미배정</span>
+            <span class="period-label">기존(legacy) 메뉴</span>
           </div>
-        `).join('')}
+          <div class="period-body">
+            <div class="admin-list">
+              ${orphanItems.map(it => `
+                <div class="admin-row ${it.active ? '' : 'inactive'}">
+                  <div class="name">${escape(it.name)}</div>
+                  <button class="del" data-orphan-del="${it.id}" data-name="${escape(it.name)}">삭제</button>
+                </div>
+              `).join('')}
+            </div>
+            <p class="muted-note">위 메뉴는 기간이 정해지지 않아 신청자에게 안 보입니다. 삭제하거나 무시해주세요.</p>
+          </div>
+        </div>
+      ` : ''}
+
+      <div class="section-title"><h2>새 기간 추가</h2></div>
+      <div class="period-add-form">
+        <div class="field-row">
+          <input class="input" id="newPeriodLabel" maxlength="50" placeholder="예: 6월 전반" />
+          <select class="input" id="newPeriodKind" style="max-width:130px;">
+            <option value="weekday">상시</option>
+            <option value="holiday">매장 휴무일</option>
+          </select>
+        </div>
+        <div class="field-row" style="margin-top:6px;">
+          <input class="input" id="newPeriodStart" type="date" />
+          <span style="color:var(--muted);align-self:center;">~</span>
+          <input class="input" id="newPeriodEnd" type="date" />
+        </div>
+        <button class="btn btn-primary" id="addPeriodBtn" style="margin-top:8px;">+ 기간 추가</button>
       </div>
 
-      <div class="section-title"><h2>새 메뉴 추가</h2></div>
-      <div class="add-row">
-        <input class="input" id="newName" maxlength="50" placeholder="예: 컵라면" />
-        <button class="btn btn-primary" id="addBtn">추가</button>
+      <div class="section-title" style="margin-top:24px;">
+        <h2>🏪 매장 휴무일 (${sortedHolidays.length}개)</h2>
       </div>
-      <p class="muted-note">활성 상태인 항목만 신청자에게 보입니다.</p>
+      <p class="muted-note" style="margin-bottom:10px;">
+        등록된 날짜는 자동으로 휴무일 메뉴가 적용됩니다.
+      </p>
+      <div class="holiday-list">
+        ${sortedHolidays.length === 0 ? `
+          <div class="empty"><span class="empty-emoji">📭</span>등록된 휴무일이 없습니다</div>
+        ` : sortedHolidays.map(d => {
+          const dt = new Date(d + 'T00:00:00');
+          const dow = ['일','월','화','수','목','금','토'][dt.getDay()];
+          return `
+            <div class="holiday-row">
+              <span class="hr-date">${d.slice(5)} (${dow})</span>
+              <span class="hr-full">${d}</span>
+              <button class="del" data-holiday-del="${d}">제거</button>
+            </div>
+          `;
+        }).join('')}
+      </div>
+      <div class="field-row" style="margin-top:8px;">
+        <input class="input" id="newHolidayDate" type="date" style="flex:1;" />
+        <input class="input" id="newHolidayLabel" maxlength="30" placeholder="라벨 (선택)" />
+        <button class="btn btn-primary" id="addHolidayBtn">+ 추가</button>
+      </div>
     `;
 
-    document.querySelectorAll('[data-toggle]').forEach(b =>
+    // Period actions
+    document.querySelectorAll('[data-period-toggle]').forEach(b =>
       b.addEventListener('click', async () => {
-        const id = Number(b.dataset.toggle);
+        const id = Number(b.dataset.periodToggle);
+        const newActive = b.dataset.active !== '1';
+        try {
+          await api(`/api/menu-periods/${id}`, { method: 'PATCH', body: JSON.stringify({ active: newActive }) });
+          await loadMenuPeriods({ include_inactive: true });
+          renderAdmin();
+        } catch (e) { toast(e.message); }
+      }));
+
+    document.querySelectorAll('[data-period-del]').forEach(b =>
+      b.addEventListener('click', async () => {
+        const id = Number(b.dataset.periodDel);
+        if (!confirm(`"${b.dataset.label}" 기간과 그 안의 모든 메뉴를 삭제할까요?`)) return;
+        try {
+          await api(`/api/menu-periods/${id}`, { method: 'DELETE' });
+          toast('삭제되었습니다');
+          await Promise.all([loadMenuPeriods({ include_inactive: true }), loadAdminItems()]);
+          renderAdmin();
+        } catch (e) { toast(e.message); }
+      }));
+
+    // Period menu item actions
+    document.querySelectorAll('[data-item-toggle]').forEach(b =>
+      b.addEventListener('click', async () => {
+        const id = Number(b.dataset.itemToggle);
         const newActive = b.dataset.active !== '1';
         try {
           await api(`/api/menu-items/${id}`, { method: 'PATCH', body: JSON.stringify({ active: newActive }) });
@@ -2628,9 +2828,9 @@
         } catch (e) { toast(e.message); }
       }));
 
-    document.querySelectorAll('[data-del]').forEach(b =>
+    document.querySelectorAll('[data-item-del]').forEach(b =>
       b.addEventListener('click', async () => {
-        const id = Number(b.dataset.del);
+        const id = Number(b.dataset.itemDel);
         if (!confirm(`"${b.dataset.name}" 메뉴를 삭제할까요?`)) return;
         try {
           await api(`/api/menu-items/${id}`, { method: 'DELETE' });
@@ -2640,20 +2840,113 @@
         } catch (e) { toast(e.message); }
       }));
 
-    const input = $('#newName');
-    async function addMenu() {
-      const name = input.value.trim();
-      if (!name) { toast('메뉴 이름을 입력해주세요'); return; }
+    document.querySelectorAll('[data-orphan-del]').forEach(b =>
+      b.addEventListener('click', async () => {
+        const id = Number(b.dataset.orphanDel);
+        if (!confirm(`"${b.dataset.name}" 메뉴를 삭제할까요?`)) return;
+        try {
+          await api(`/api/menu-items/${id}`, { method: 'DELETE' });
+          await loadAdminItems();
+          renderAdmin();
+        } catch (e) { toast(e.message); }
+      }));
+
+    // Per-period add menu button
+    document.querySelectorAll('[data-add-period-item]').forEach(b =>
+      b.addEventListener('click', async () => {
+        const periodId = Number(b.dataset.addPeriodItem);
+        const wrap = b.closest('.period-card');
+        const nameInput = wrap.querySelector('[data-new-item-name]');
+        const name = nameInput.value.trim();
+        if (!name) { toast('메뉴 이름을 입력해주세요'); return; }
+        try {
+          await api('/api/menu-items', {
+            method: 'POST',
+            body: JSON.stringify({ meal_type: 'late_night', name, period_id: periodId }),
+          });
+          toast('추가되었습니다');
+          nameInput.value = '';
+          await loadAdminItems();
+          renderAdmin();
+        } catch (e) { toast(e.message); }
+      }));
+
+    // New period add
+    $('#addPeriodBtn').addEventListener('click', async () => {
+      const label = $('#newPeriodLabel').value.trim();
+      const kind = $('#newPeriodKind').value;
+      const start = $('#newPeriodStart').value;
+      const end = $('#newPeriodEnd').value;
+      if (!label || !start || !end) { toast('모든 항목을 입력해주세요'); return; }
       try {
-        await api('/api/menu-items', { method: 'POST', body: JSON.stringify({ meal_type: 'late_night', name }) });
-        toast('추가되었습니다');
-        input.value = '';
-        await loadAdminItems();
+        await api('/api/menu-periods', {
+          method: 'POST',
+          body: JSON.stringify({ meal_type: 'late_night', label, kind, start_date: start, end_date: end }),
+        });
+        toast('기간 추가됨');
+        await loadMenuPeriods({ include_inactive: true });
         renderAdmin();
       } catch (e) { toast(e.message); }
-    }
-    $('#addBtn').addEventListener('click', addMenu);
-    input.addEventListener('keydown', e => { if (e.key === 'Enter') addMenu(); });
+    });
+
+    // Holiday actions
+    document.querySelectorAll('[data-holiday-del]').forEach(b =>
+      b.addEventListener('click', async () => {
+        const date = b.dataset.holidayDel;
+        if (!confirm(`${date} 휴무일을 제거할까요?`)) return;
+        try {
+          await api(`/api/holidays/${date}`, { method: 'DELETE' });
+          await loadHolidays();
+          renderAdmin();
+        } catch (e) { toast(e.message); }
+      }));
+
+    $('#addHolidayBtn').addEventListener('click', async () => {
+      const date = $('#newHolidayDate').value;
+      const label = $('#newHolidayLabel').value.trim();
+      if (!date) { toast('날짜를 선택해주세요'); return; }
+      try {
+        await api('/api/holidays', { method: 'POST', body: JSON.stringify({ date, label }) });
+        toast('휴무일 추가됨');
+        $('#newHolidayDate').value = '';
+        $('#newHolidayLabel').value = '';
+        await loadHolidays();
+        renderAdmin();
+      } catch (e) { toast(e.message); }
+    });
+  }
+
+  function renderPeriodCard(p, items) {
+    const kindLabel = p.kind === 'holiday' ? '🏪 매장 휴무일' : '🍽️ 상시';
+    return `
+      <div class="period-card ${p.active ? '' : 'inactive'} ${p.kind === 'holiday' ? 'holiday' : ''}">
+        <div class="period-head">
+          <span class="period-kind ${p.kind}">${kindLabel}</span>
+          <span class="period-label">${escape(p.label)}</span>
+          <span class="period-range">${p.start_date.slice(5)} ~ ${p.end_date.slice(5)}</span>
+          <div class="period-actions">
+            <button class="btn-sm btn-ghost" data-period-toggle="${p.id}" data-active="${p.active ? 1 : 0}">${p.active ? '숨기기' : '보이기'}</button>
+            <button class="btn-sm btn-ghost" data-period-del="${p.id}" data-label="${escape(p.label)}">삭제</button>
+          </div>
+        </div>
+        <div class="period-body">
+          <div class="admin-list">
+            ${items.length === 0 ? `<div class="muted-note" style="text-align:center;padding:10px;">메뉴 없음</div>` :
+              items.map(it => `
+                <div class="admin-row ${it.active ? '' : 'inactive'}">
+                  <div class="name">${escape(it.name)}</div>
+                  <button data-item-toggle="${it.id}" data-active="${it.active}">${it.active ? '숨기기' : '보이기'}</button>
+                  <button class="del" data-item-del="${it.id}" data-name="${escape(it.name)}">삭제</button>
+                </div>
+              `).join('')}
+          </div>
+          <div class="field-row" style="margin-top:8px;">
+            <input class="input" data-new-item-name maxlength="50" placeholder="예: 돼지국밥" />
+            <button class="btn btn-primary" data-add-period-item="${p.id}">+ 메뉴</button>
+          </div>
+        </div>
+      </div>
+    `;
   }
 
   function renderAdminBreakfast() {
@@ -2928,6 +3221,18 @@
       kimbapOptions = await api('/api/kimbap-options' + qs);
     } catch { kimbapOptions = []; }
   }
+  async function loadHolidays() {
+    try {
+      const list = await api('/api/holidays');
+      holidaysSet = new Set((list || []).map(h => h.date));
+    } catch { holidaysSet = new Set(); }
+  }
+  async function loadMenuPeriods({ include_inactive = false } = {}) {
+    try {
+      const qs = include_inactive ? '?include_inactive=1' : '';
+      menuPeriods = await api('/api/menu-periods' + qs);
+    } catch { menuPeriods = []; }
+  }
   async function loadAdminItems() {
     try { adminItems = await api('/api/menu-items?include_inactive=1&meal_type=late_night'); }
     catch { adminItems = []; }
@@ -2985,11 +3290,18 @@
     if (!role) { renderRolePicker(); return; }
 
     if (role === 'applicant') {
-      await Promise.all([loadMyOrders(), loadMenuItems(), loadBreakfastStructure(), loadKimbapOptions()]);
+      lateNightMenuByDate = {};  // clear cache on enter
+      await Promise.all([
+        loadMyOrders(),
+        loadMenuItems(),
+        loadBreakfastStructure(),
+        loadKimbapOptions(),
+        loadHolidays(),
+      ]);
       renderApplicant();
       startPolling();
     } else if (role === 'acting') {
-      await loadActiveSummary();
+      await Promise.all([loadActiveSummary(), loadHolidays()]);
       if (actingStep === 'list' && actingMealType) {
         if (!actingDate) actingDate = todayStr();
         await loadActiveOrders();
@@ -3000,7 +3312,9 @@
       await Promise.all([
         loadAdminItems(),
         loadBreakfastStructure({ include_inactive: true }),
-        loadKimbapOptions({ include_inactive: true })
+        loadKimbapOptions({ include_inactive: true }),
+        loadHolidays(),
+        loadMenuPeriods({ include_inactive: true }),
       ]);
       renderAdmin();
     }
