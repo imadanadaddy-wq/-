@@ -1029,7 +1029,76 @@ app.post('/api/admin/cleanup', (req, res) => {
   res.json({ deleted: result.changes });
 });
 
+// Admin: pickup log for a given date (all statuses, all meal_types)
+// Returns: orders with status (pending/picked_up), meal_form for breakfast, picked_up_at timestamp
+app.get('/api/admin/pickup-log', (req, res) => {
+  const user = requireAdmin(req, res);
+  if (!user) return;
+
+  const { date } = req.query;
+  if (!date || !validDate(date)) {
+    return res.status(400).json({ error: '날짜를 지정해주세요 (YYYY-MM-DD)' });
+  }
+
+  const orders = db.prepare(`
+    SELECT mo.id, mo.meal_type, mo.menu, mo.selection, mo.service_date,
+           mo.status, mo.created_at, mo.picked_up_at,
+           u.employee_id, u.name
+    FROM meal_orders mo
+    JOIN users u ON mo.user_id = u.id
+    WHERE mo.service_date = ?
+    ORDER BY mo.meal_type, COALESCE(mo.picked_up_at, mo.created_at), u.name
+  `).all(date);
+
+  res.json(orders.map(decorateOrder));
+});
+
+// Admin: which dates in the retention window have any orders (for calendar UI)
+app.get('/api/admin/pickup-log/dates', (req, res) => {
+  const user = requireAdmin(req, res);
+  if (!user) return;
+
+  const rows = db.prepare(`
+    SELECT service_date,
+           SUM(CASE WHEN status = 'picked_up' THEN 1 ELSE 0 END) AS picked,
+           SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) AS pending,
+           COUNT(*) AS total
+    FROM meal_orders
+    GROUP BY service_date
+    ORDER BY service_date DESC
+  `).all();
+
+  res.json(rows);
+});
+
 app.get('/health', (req, res) => res.json({ ok: true }));
+
+// 진단용: 현재 DB가 어디 저장되고 있는지, 오래된 데이터가 있는지 확인
+app.get('/db-status', (req, res) => {
+  try {
+    const stats = fs.statSync(DB_PATH);
+    const orderCount = db.prepare('SELECT COUNT(*) AS n FROM meal_orders').get().n;
+    const oldestOrder = db.prepare(`
+      SELECT service_date, COUNT(*) AS n FROM meal_orders
+      GROUP BY service_date ORDER BY service_date LIMIT 5
+    `).all();
+    const onRailway = !!(process.env.RAILWAY_ENVIRONMENT || process.env.RAILWAY_PROJECT_ID);
+    const isPersistent = DB_PATH.startsWith('/data') || DB_PATH.startsWith('/mnt') || DB_PATH.startsWith('/var/lib');
+    res.json({
+      db_path: DB_PATH,
+      db_size_bytes: stats.size,
+      db_modified: stats.mtime.toISOString(),
+      on_railway: onRailway,
+      is_persistent_path: isPersistent,
+      database_path_env: process.env.DATABASE_PATH || null,
+      total_orders: orderCount,
+      orders_by_date: oldestOrder,
+      warning: (onRailway && !isPersistent) ? '⚠️ DB가 임시 저장소에 있음. Railway Volume 설정 필요' : null,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
 
 // Pretty URL for the user guide
 app.get('/guide', (req, res) => {
@@ -1040,27 +1109,42 @@ app.listen(PORT, () => {
   console.log(`KNUH Meal Dashboard listening on :${PORT}`);
   console.log(`DB: ${DB_PATH}`);
 
-  // ── 자정 자동 삭제: 전날(service_date < 오늘) 주문 전량 삭제 ──────────────
+  // ── 자정 자동 정리: 3일 이전(service_date < 오늘-2일) 주문 삭제 ─────────
+  // 오늘 + 어제 + 그저께(3일치)는 보존 → 관리자 수령 로그 확인용
+  // 추가 안전망: 서버 시작 시에도 한 번 청소 (자정에 서버가 꺼져 있었을 경우 대비)
+  function cleanupPastOrders(label) {
+    try {
+      // Retention cutoff = today - 2 days (inclusive). Anything earlier gets deleted.
+      const today = new Date();
+      const cutoff = new Date(today.getFullYear(), today.getMonth(), today.getDate() - 2);
+      const cutoffStr = cutoff.toLocaleDateString('sv-SE'); // YYYY-MM-DD (local)
+      const result = db.prepare(`
+        DELETE FROM meal_orders
+        WHERE service_date < ?
+      `).run(cutoffStr);
+      if (result.changes > 0) {
+        console.log(`[${label}] deleted ${result.changes} orders older than ${cutoffStr} (3-day retention)`);
+      } else {
+        console.log(`[${label}] no stale orders to delete (cutoff=${cutoffStr})`);
+      }
+    } catch (e) {
+      console.error(`[${label}] error:`, e);
+    }
+  }
+
   function scheduleMidnightCleanup() {
     const now = new Date();
-    // Next midnight (local)
-    const next = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 0, 0, 5); // 00:00:05
+    // Next midnight (local) + 5s buffer
+    const next = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 0, 0, 5);
     const msUntil = next - now;
     setTimeout(() => {
-      try {
-        const today = new Date().toLocaleDateString('sv-SE'); // YYYY-MM-DD
-        const result = db.prepare(`
-          DELETE FROM meal_orders
-          WHERE service_date < ?
-        `).run(today);
-        console.log(`[midnight cleanup] deleted ${result.changes} orders older than ${today}`);
-      } catch (e) {
-        console.error('[midnight cleanup] error:', e);
-      }
+      cleanupPastOrders('midnight cleanup');
       scheduleMidnightCleanup(); // reschedule for next midnight
     }, msUntil);
     console.log(`[midnight cleanup] scheduled in ${Math.round(msUntil / 60000)}min`);
   }
+  // Run once on startup so stale data is gone immediately
+  cleanupPastOrders('startup cleanup');
   scheduleMidnightCleanup();
   // ──────────────────────────────────────────────────────────────────────────
 

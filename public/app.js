@@ -46,6 +46,9 @@
 
   // Admin
   let adminMealTab = 'breakfast';
+  let adminLogDate = null;        // selected date string for pickup log
+  let adminLogDates = [];         // dates with order activity (within retention)
+  let adminLogOrders = [];        // orders for selected date
   let adminItems = [];
   let breakfastStructure = [];
   let adminBreakfastExpanded = new Set();
@@ -1220,7 +1223,6 @@
       const r = activeSummary.find(x => x.service_date === d && x.meal_type === mt);
       return r ? r.n : 0;
     };
-    const totalFor = (mt) => activeSummary.filter(x => x.meal_type === mt).reduce((s, x) => s + x.n, 0);
 
     root.innerHTML = `
       ${renderBrand()}
@@ -1235,12 +1237,12 @@
         <button class="choice-card breakfast" data-meal="breakfast">
           <span class="emoji">🍳</span>
           <span class="name">조식</span>
-          <span class="count">오늘 ${countFor('breakfast', today)} · 내일 ${countFor('breakfast', tomorrow)} · 전체 ${totalFor('breakfast')}</span>
+          <span class="count">오늘 ${countFor('breakfast', today)} · 내일 ${countFor('breakfast', tomorrow)}</span>
         </button>
         <button class="choice-card late_night" data-meal="late_night">
           <span class="emoji">🍜</span>
           <span class="name">야식</span>
-          <span class="count">오늘 ${countFor('late_night', today)} · 내일 ${countFor('late_night', tomorrow)} · 전체 ${totalFor('late_night')}</span>
+          <span class="count">오늘 ${countFor('late_night', today)} · 내일 ${countFor('late_night', tomorrow)}</span>
         </button>
       </div>
     `;
@@ -1397,7 +1399,13 @@
         if (!order) return;
         // no_meal orders open in a simpler info modal (no barcode pickup loop)
         if (order.selection && order.selection.meal_form === 'no_meal') {
-          openNoMealInfo(order);
+          openNoMealInfo(order, {
+            onConfirmed: async () => {
+              toast('미수령으로 처리되었습니다');
+              await Promise.all([loadActiveOrders(), loadActiveSummary()]);
+              renderActing();
+            }
+          });
           return;
         }
         // For pickup-able orders, open viewer with the pickupable list (skip no_meal so swipe stays useful)
@@ -1416,7 +1424,8 @@
   }
 
   // Lightweight info card for no_meal orders (no barcode shown — nothing to scan)
-  function openNoMealInfo(order) {
+  function openNoMealInfo(order, opts = {}) {
+    const onConfirmed = opts.onConfirmed || (() => {});
     const overlay = document.createElement('div');
     overlay.className = 'modal-overlay';
     overlay.innerHTML = `
@@ -1441,8 +1450,12 @@
               ${escape(order.selection.note)}
             </div>
           ` : ''}
+          <p style="margin-top:14px;font-size:12px;color:#666;line-height:1.5;">
+            확인을 누르면 목록에서 제거되어 더 이상 액팅 화면에 보이지 않습니다.
+          </p>
           <div class="modal-actions" style="margin-top:16px;">
             <button class="btn btn-ghost-light" data-close>닫기</button>
+            <button class="btn" data-confirm-no-meal>확인 (제거)</button>
           </div>
         </div>
       </div>
@@ -1453,9 +1466,24 @@
       overlay.remove();
       document.body.style.overflow = '';
     }
-    overlay.addEventListener('click', (e) => {
-      if (e.target === overlay) close();
-      if (e.target.closest && e.target.closest('[data-close]')) close();
+    overlay.addEventListener('click', async (e) => {
+      if (e.target === overlay) { close(); return; }
+      if (e.target.closest && e.target.closest('[data-close]')) { close(); return; }
+      if (e.target.closest && e.target.closest('[data-confirm-no-meal]')) {
+        const btn = e.target.closest('[data-confirm-no-meal]');
+        btn.disabled = true;
+        btn.textContent = '처리 중...';
+        try {
+          // Mark as picked_up so it's removed from the pending list
+          await api(`/api/orders/${order.id}/pickup`, { method: 'POST' });
+          close();
+          await onConfirmed();
+        } catch (err) {
+          toast(err.message);
+          btn.disabled = false;
+          btn.textContent = '확인 (제거)';
+        }
+      }
     });
     document.addEventListener('keydown', function esc(e) {
       if (e.key === 'Escape') { close(); document.removeEventListener('keydown', esc); }
@@ -1853,6 +1881,7 @@
         <button class="tab ${adminMealTab==='breakfast'?'active':''}" data-tab="breakfast">🍳 조식 구조</button>
         <button class="tab ${adminMealTab==='late_night'?'active':''}" data-tab="late_night">🍜 야식 메뉴</button>
         <button class="tab ${adminMealTab==='manual'?'active':''}" data-tab="manual">📋 수동 입력</button>
+        <button class="tab ${adminMealTab==='log'?'active':''}" data-tab="log">📊 수령 로그</button>
       </div>
 
       <div id="adminBody"></div>
@@ -1864,6 +1893,7 @@
 
     if (adminMealTab === 'breakfast') renderAdminBreakfast();
     else if (adminMealTab === 'manual') renderAdminManual();
+    else if (adminMealTab === 'log') renderAdminLog();
     else renderAdminLateNight();
   }
 
@@ -2389,6 +2419,175 @@
       toast(e.message);
       if (btn) { btn.disabled = false; btn.textContent = '등록하기'; }
     }
+  }
+
+  // ===== Admin: Pickup Log =====
+  async function renderAdminLog() {
+    // Load activity dates (with counts) on first render
+    if (!adminLogDate) {
+      adminLogDate = todayStr();
+    }
+    try {
+      adminLogDates = await api('/api/admin/pickup-log/dates');
+    } catch (e) {
+      adminLogDates = [];
+      toast(e.message);
+    }
+    await loadAdminLogOrders();
+    renderAdminLogContent();
+  }
+
+  async function loadAdminLogOrders() {
+    try {
+      adminLogOrders = await api(`/api/admin/pickup-log?date=${encodeURIComponent(adminLogDate)}`);
+    } catch (e) {
+      adminLogOrders = [];
+      toast(e.message);
+    }
+  }
+
+  function renderAdminLogContent() {
+    const todayS = todayStr();
+    // Build last 3 days (retention window)
+    const dateOptions = [];
+    for (let i = 0; i < 3; i++) {
+      dateOptions.push(addDays(todayS, -i));
+    }
+
+    const countByDate = {};
+    for (const d of adminLogDates) {
+      countByDate[d.service_date] = d;
+    }
+
+    // Split orders into picked/pending
+    const breakfast = { picked: [], pending: [] };
+    const late_night = { picked: [], pending: [] };
+    for (const o of adminLogOrders) {
+      const bucket = o.meal_type === 'breakfast' ? breakfast : late_night;
+      if (o.status === 'picked_up') bucket.picked.push(o);
+      else bucket.pending.push(o);
+    }
+
+    const totalCount = adminLogOrders.length;
+    const pickedCount = breakfast.picked.length + late_night.picked.length;
+    const pendingCount = totalCount - pickedCount;
+
+    $('#adminBody').innerHTML = `
+      <p style="margin:4px 4px 12px;color:var(--muted);font-size:13px;">
+        오늘 포함 최근 <strong>3일치</strong> 수령 기록을 볼 수 있어요. 그 이상은 자동 삭제됩니다.
+      </p>
+
+      <div class="log-date-row">
+        ${dateOptions.map(d => {
+          const info = countByDate[d];
+          const total = info ? info.total : 0;
+          const picked = info ? info.picked : 0;
+          const isSel = d === adminLogDate;
+          const dow = new Date(d + 'T00:00:00').getDay();
+          const dowKor = ['일','월','화','수','목','금','토'][dow];
+          const isToday = d === todayS;
+          const label = isToday ? '오늘' : (d === addDays(todayS, -1) ? '어제' : '그저께');
+          return `
+            <button class="log-date-card ${isSel ? 'sel' : ''} ${total === 0 ? 'empty' : ''}" data-log-date="${d}">
+              <div class="ldc-label">${label}</div>
+              <div class="ldc-date">${d.slice(5)} (${dowKor})</div>
+              <div class="ldc-counts">
+                ${total === 0 ? '<span class="ldc-empty">신청 없음</span>'
+                  : `<span class="ldc-picked">✓ ${picked}</span> · <span class="ldc-total">총 ${total}</span>`}
+              </div>
+            </button>
+          `;
+        }).join('')}
+      </div>
+
+      ${totalCount === 0 ? `
+        <div class="empty" style="margin-top:18px;">
+          <span class="empty-emoji">📭</span>
+          ${fmtDate(adminLogDate)}에 신청 기록이 없습니다
+        </div>
+      ` : `
+        <div class="log-stats">
+          <div class="log-stat-card picked">
+            <div class="ls-num">${pickedCount}</div>
+            <div class="ls-lbl">✓ 수령 완료</div>
+          </div>
+          <div class="log-stat-card pending">
+            <div class="ls-num">${pendingCount}</div>
+            <div class="ls-lbl">⏳ 미수령 (대기 중)</div>
+          </div>
+        </div>
+
+        ${renderLogSection('🍳 조식', breakfast)}
+        ${renderLogSection('🍜 야식', late_night)}
+      `}
+    `;
+
+    document.querySelectorAll('[data-log-date]').forEach(b =>
+      b.addEventListener('click', async () => {
+        adminLogDate = b.dataset.logDate;
+        await loadAdminLogOrders();
+        renderAdminLogContent();
+      }));
+  }
+
+  function renderLogSection(title, bucket) {
+    const total = bucket.picked.length + bucket.pending.length;
+    if (total === 0) return '';
+    // Combine: picked sorted by picked_up_at desc, then pending sorted by created_at
+    const sortedPicked = bucket.picked.slice().sort((a, b) =>
+      (b.picked_up_at || '').localeCompare(a.picked_up_at || '')
+    );
+    const sortedPending = bucket.pending.slice().sort((a, b) =>
+      (a.created_at || '').localeCompare(b.created_at || '')
+    );
+    return `
+      <div class="section-title" style="margin-top:18px;">
+        <h2>${title} (${total})</h2>
+      </div>
+      <div class="log-list">
+        ${sortedPicked.map(o => renderLogRow(o)).join('')}
+        ${sortedPending.map(o => renderLogRow(o)).join('')}
+      </div>
+    `;
+  }
+
+  function renderLogRow(o) {
+    const isPicked = o.status === 'picked_up';
+    const isNoMeal = o.selection && o.selection.meal_form === 'no_meal';
+    const time = isPicked && o.picked_up_at
+      ? new Date(o.picked_up_at + 'Z').toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })
+      : '';
+    const statusLabel = isPicked
+      ? (isNoMeal ? '🙅 미수령 확인됨' : `✓ 수령 ${time}`)
+      : (isNoMeal ? '⏳ 미수령 대기' : '⏳ 미수령');
+    const menuSummary = renderLogMenuSummary(o);
+    return `
+      <div class="log-row ${isPicked ? 'picked' : 'pending'} ${isNoMeal ? 'no-meal' : ''}">
+        <div class="lr-head">
+          <span class="lr-name">${escape(o.name)}</span>
+          <span class="lr-eid">${escape(o.employee_id)}</span>
+          <span class="lr-status">${statusLabel}</span>
+        </div>
+        <div class="lr-menu">${menuSummary}</div>
+      </div>
+    `;
+  }
+
+  function renderLogMenuSummary(o) {
+    const sel = o.selection;
+    if (!sel) return escape(o.menu || '');
+    if (sel.meal_form === 'no_meal') {
+      return `🚫 식사 안 받음${sel.note ? ` · 📝 ${escape(sel.note)}` : ''}`;
+    }
+    if (sel.meal_form === 'kimbap') {
+      return `🍙 ${escape(sel.kimbap_choice || '')}${sel.note ? ` · 📝 ${escape(sel.note)}` : ''}`;
+    }
+    if (sel.meal_form === 'snack_pick') {
+      const prios = Array.isArray(sel.category_priorities) ? sel.category_priorities : [];
+      const summary = prios.map((cc, i) => `${i+1}순위 ${escape(cc.category_name || '')}`).join(' → ');
+      return `🥣 ${summary}${sel.fallback_any ? ' → 🎲' : ''}${sel.note ? ` · 📝 ${escape(sel.note)}` : ''}`;
+    }
+    return escape(o.menu || '');
   }
 
   function renderAdminLateNight() {
