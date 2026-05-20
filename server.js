@@ -116,6 +116,16 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_menu_items_meal ON menu_items(meal_type, active, sort_order);
   CREATE INDEX IF NOT EXISTS idx_categories_meal ON meal_categories(meal_type, active, sort_order);
   CREATE INDEX IF NOT EXISTS idx_menu_periods_lookup ON menu_periods(meal_type, kind, start_date, end_date, active);
+
+  -- Admin notices: shown to users as a one-time popup on first visit
+  CREATE TABLE IF NOT EXISTS notices (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL,
+    body TEXT NOT NULL,
+    active INTEGER NOT NULL DEFAULT 1,       -- 0 = hidden, 1 = active
+    expire_at DATETIME,                       -- NULL = never expires
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
   CREATE INDEX IF NOT EXISTS idx_slots_category ON meal_slots(category_id, sort_order);
 `);
 
@@ -813,6 +823,88 @@ app.delete('/api/holidays/:date', (req, res) => {
   if (!validDate(date)) return res.status(400).json({ error: '날짜 형식이 올바르지 않습니다' });
   const r = db.prepare('DELETE FROM holidays WHERE date = ?').run(date);
   if (r.changes === 0) return res.status(404).json({ error: '해당 휴무일을 찾을 수 없습니다' });
+  res.json({ ok: true });
+});
+
+// --- Notices ---
+
+// Public: return the single currently-active, non-expired notice (for popup)
+app.get('/api/notices/active', (req, res) => {
+  const user = requireUser(req, res);
+  if (!user) return;
+  const now = new Date().toISOString();
+  const notice = db.prepare(`
+    SELECT id, title, body, expire_at, created_at
+    FROM notices
+    WHERE active = 1
+      AND (expire_at IS NULL OR expire_at > ?)
+    ORDER BY created_at DESC
+    LIMIT 1
+  `).get(now);
+  res.json(notice || null);
+});
+
+// Admin: list all notices
+app.get('/api/admin/notices', (req, res) => {
+  const user = requireAdmin(req, res);
+  if (!user) return;
+  res.json(db.prepare('SELECT * FROM notices ORDER BY created_at DESC').all());
+});
+
+// Admin: create notice
+app.post('/api/admin/notices', (req, res) => {
+  const user = requireAdmin(req, res);
+  if (!user) return;
+  let { title, body, expire_at } = req.body || {};
+  title = String(title || '').trim();
+  body  = String(body  || '').trim();
+  if (!title) return res.status(400).json({ error: '제목을 입력해주세요' });
+  if (!body)  return res.status(400).json({ error: '내용을 입력해주세요' });
+  if (title.length > 100) return res.status(400).json({ error: '제목이 너무 깁니다' });
+  if (body.length  > 1000) return res.status(400).json({ error: '내용이 너무 깁니다' });
+  // expire_at: accept ISO string or null/empty → null
+  const expireVal = expire_at && String(expire_at).trim() ? String(expire_at).trim() : null;
+  const r = db.prepare('INSERT INTO notices (title, body, expire_at) VALUES (?, ?, ?)').run(title, body, expireVal);
+  res.json(db.prepare('SELECT * FROM notices WHERE id = ?').get(Number(r.lastInsertRowid)));
+});
+
+// Admin: update (title/body/active/expire_at)
+app.patch('/api/admin/notices/:id', (req, res) => {
+  const user = requireAdmin(req, res);
+  if (!user) return;
+  const id = Number(req.params.id);
+  const notice = db.prepare('SELECT * FROM notices WHERE id = ?').get(id);
+  if (!notice) return res.status(404).json({ error: '공지를 찾을 수 없습니다' });
+  const updates = []; const params = [];
+  if (typeof req.body?.title === 'string') {
+    const v = req.body.title.trim();
+    if (!v || v.length > 100) return res.status(400).json({ error: '제목이 올바르지 않습니다' });
+    updates.push('title = ?'); params.push(v);
+  }
+  if (typeof req.body?.body === 'string') {
+    const v = req.body.body.trim();
+    if (!v || v.length > 1000) return res.status(400).json({ error: '내용이 올바르지 않습니다' });
+    updates.push('body = ?'); params.push(v);
+  }
+  if (typeof req.body?.active === 'boolean') {
+    updates.push('active = ?'); params.push(req.body.active ? 1 : 0);
+  }
+  if ('expire_at' in (req.body || {})) {
+    const v = req.body.expire_at && String(req.body.expire_at).trim() ? String(req.body.expire_at).trim() : null;
+    updates.push('expire_at = ?'); params.push(v);
+  }
+  if (!updates.length) return res.status(400).json({ error: '변경할 내용이 없습니다' });
+  params.push(id);
+  db.prepare(`UPDATE notices SET ${updates.join(', ')} WHERE id = ?`).run(...params);
+  res.json(db.prepare('SELECT * FROM notices WHERE id = ?').get(id));
+});
+
+// Admin: delete notice
+app.delete('/api/admin/notices/:id', (req, res) => {
+  const user = requireAdmin(req, res);
+  if (!user) return;
+  const r = db.prepare('DELETE FROM notices WHERE id = ?').run(Number(req.params.id));
+  if (r.changes === 0) return res.status(404).json({ error: '공지를 찾을 수 없습니다' });
   res.json({ ok: true });
 });
 

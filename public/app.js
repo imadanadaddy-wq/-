@@ -2082,6 +2082,7 @@
         <button class="tab ${adminMealTab==='late_night'?'active':''}" data-tab="late_night">🍜 야식 메뉴</button>
         <button class="tab ${adminMealTab==='manual'?'active':''}" data-tab="manual">📋 수동 입력</button>
         <button class="tab ${adminMealTab==='log'?'active':''}" data-tab="log">📊 수령 로그</button>
+        <button class="tab ${adminMealTab==='notice'?'active':''}" data-tab="notice">📢 공지</button>
       </div>
 
       <div id="adminBody"></div>
@@ -2094,6 +2095,7 @@
     if (adminMealTab === 'breakfast') renderAdminBreakfast();
     else if (adminMealTab === 'manual') renderAdminManual();
     else if (adminMealTab === 'log') renderAdminLog();
+    else if (adminMealTab === 'notice') renderAdminNotice();
     else renderAdminLateNight();
   }
 
@@ -2795,6 +2797,125 @@
     return escape(o.menu || '');
   }
 
+  // ===== Admin: Notice Management =====
+  async function renderAdminNotice() {
+    let notices = [];
+    try { notices = await api('/api/admin/notices'); } catch(e) { toast(e.message); }
+
+    const fmtExpire = (v) => {
+      if (!v) return '<span style="color:var(--muted)">만료 없음</span>';
+      const d = new Date(v);
+      return d.toLocaleDateString('ko-KR', { month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+    };
+    const isExpired = (v) => v && new Date(v) < new Date();
+    const isActive = (n) => n.active && !isExpired(n.expire_at);
+
+    $('#adminBody').innerHTML = `
+      <p class="muted-note" style="margin-bottom:12px;">
+        활성 공지는 사용자가 앱에 접속할 때 팝업으로 1회 표시됩니다.
+        한 번에 1개만 보이며, 가장 최근 활성 공지가 우선합니다.
+      </p>
+
+      <!-- 공지 목록 -->
+      <div class="section-title"><h2>등록된 공지 (${notices.length}개)</h2></div>
+      <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:20px;">
+        ${notices.length === 0 ? `<div class="empty"><span class="empty-emoji">📭</span>등록된 공지가 없습니다</div>` :
+          notices.map(n => `
+            <div class="period-card ${isActive(n) ? '' : 'inactive'}">
+              <div class="period-head">
+                <span class="period-kind ${isActive(n) ? 'weekday' : 'orphan'}">
+                  ${isExpired(n.expire_at) ? '⏰ 만료됨' : n.active ? '📢 활성' : '🔕 꺼짐'}
+                </span>
+                <span class="period-label" style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escape(n.title)}</span>
+                <div class="period-actions">
+                  <button class="btn-sm btn-ghost" data-notice-toggle="${n.id}" data-active="${n.active}">
+                    ${n.active ? '끄기' : '켜기'}
+                  </button>
+                  <button class="btn-sm btn-ghost" style="color:#ef4444;" data-notice-del="${n.id}" data-title="${escape(n.title)}">삭제</button>
+                </div>
+              </div>
+              <div class="period-body">
+                <div style="font-size:13px;color:var(--text-soft);white-space:pre-wrap;line-height:1.65;margin-bottom:8px;">${escape(n.body)}</div>
+                <div style="font-size:11px;color:var(--muted);">
+                  만료: ${fmtExpire(n.expire_at)} &nbsp;·&nbsp;
+                  등록: ${new Date(n.created_at).toLocaleDateString('ko-KR', {month:'long',day:'numeric'})}
+                </div>
+              </div>
+            </div>
+          `).join('')}
+      </div>
+
+      <!-- 새 공지 작성 -->
+      <div class="section-title"><h2>새 공지 작성</h2></div>
+      <div class="period-add-form">
+        <div class="field" style="margin-bottom:8px;">
+          <label style="font-size:11px;font-weight:700;color:var(--text-soft);display:block;margin-bottom:5px;text-transform:uppercase;letter-spacing:.04em;">제목</label>
+          <input class="input" id="noticeTitle" maxlength="100" placeholder="예: 서버 점검 안내" style="width:100%;"/>
+        </div>
+        <div class="field" style="margin-bottom:8px;">
+          <label style="font-size:11px;font-weight:700;color:var(--text-soft);display:block;margin-bottom:5px;text-transform:uppercase;letter-spacing:.04em;">내용</label>
+          <textarea class="textarea" id="noticeBody" maxlength="1000" rows="4"
+            placeholder="예: 오늘 조식 수령 시간에 서버 장애로 불편을 드려 죄송합니다."></textarea>
+        </div>
+        <div class="field" style="margin-bottom:12px;">
+          <label style="font-size:11px;font-weight:700;color:var(--text-soft);display:block;margin-bottom:5px;text-transform:uppercase;letter-spacing:.04em;">
+            만료 일시 <span style="font-weight:400;color:var(--muted)">(비워두면 수동으로 끄기 전까지 표시)</span>
+          </label>
+          <input class="input" id="noticeExpire" type="datetime-local" style="width:100%;"/>
+        </div>
+        <button class="btn btn-primary" id="noticeSubmit">공지 등록</button>
+      </div>
+    `;
+
+    // Toggle active
+    document.querySelectorAll('[data-notice-toggle]').forEach(b =>
+      b.addEventListener('click', async () => {
+        const id = Number(b.dataset.noticeToggle);
+        const newActive = b.dataset.active !== '1';
+        try {
+          await api(`/api/admin/notices/${id}`, { method: 'PATCH', body: JSON.stringify({ active: newActive }) });
+          toast(newActive ? '공지 활성화됨' : '공지 꺼짐');
+          await renderAdminNotice();
+        } catch(e) { toast(e.message); }
+      }));
+
+    // Delete
+    document.querySelectorAll('[data-notice-del]').forEach(b =>
+      b.addEventListener('click', async () => {
+        if (!confirm(`"${b.dataset.title}" 공지를 삭제할까요?`)) return;
+        try {
+          await api(`/api/admin/notices/${Number(b.dataset.noticeDel)}`, { method: 'DELETE' });
+          toast('삭제되었습니다');
+          await renderAdminNotice();
+        } catch(e) { toast(e.message); }
+      }));
+
+    // Submit
+    $('#noticeSubmit').addEventListener('click', async () => {
+      const title  = $('#noticeTitle').value.trim();
+      const body   = $('#noticeBody').value.trim();
+      const expire = $('#noticeExpire').value;  // datetime-local → "YYYY-MM-DDTHH:MM"
+      if (!title) { toast('제목을 입력해주세요'); return; }
+      if (!body)  { toast('내용을 입력해주세요'); return; }
+      // Convert local datetime to ISO (KST offset +09:00)
+      let expireISO = null;
+      if (expire) {
+        const pad = n => String(n).padStart(2, '0');
+        const d = new Date(expire);
+        // Just use the value directly as KST
+        expireISO = expire + ':00+09:00';
+      }
+      try {
+        await api('/api/admin/notices', {
+          method: 'POST',
+          body: JSON.stringify({ title, body, expire_at: expireISO }),
+        });
+        toast('공지 등록됨 ✓');
+        await renderAdminNotice();
+      } catch(e) { toast(e.message); }
+    });
+  }
+
   function renderAdminLateNight() {
     // Group admin menu items by period_id
     const itemsByPeriod = {};
@@ -3386,7 +3507,8 @@
 
     if (role === 'admin' && !user.is_admin) saveRole(null);
 
-    if (!role) { renderRolePicker(); return; }
+    // 로그인 직후 공지 팝업 트리거 (역할 선택 화면에서 1회)
+    if (!role) { renderRolePicker(); checkNotice(); return; }
 
     if (role === 'applicant') {
       lateNightMenuByDate = {};  // clear cache on enter
@@ -3417,6 +3539,52 @@
       ]);
       renderAdmin();
     }
+  }
+
+  // Boot
+  loadStored();
+  render();
+  window.addEventListener('focus', () => { if (user && role) render(); });
+
+  // ── 공지 팝업 (관리자가 등록한 공지, 첫 접속 1회만) ──
+  async function checkNotice() {
+    if (!user) return;
+    try {
+      const notice = await api('/api/notices/active');
+      if (!notice) return;
+      const seenKey = `knuh_notice_seen_${notice.id}`;
+      if (localStorage.getItem(seenKey)) return;
+
+      const overlay = document.createElement('div');
+      overlay.className = 'modal-overlay';
+      overlay.innerHTML = `
+        <div class="modal" role="dialog" aria-modal="true" style="max-width:440px;">
+          <div class="viewer-content" style="padding:22px 20px 8px;">
+            <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;">
+              <span style="font-size:24px;">📢</span>
+              <div>
+                <div style="font-size:15px;font-weight:800;color:#111;">${escape(notice.title)}</div>
+                <div style="font-size:11px;color:#888;margin-top:2px;">${new Date(notice.created_at).toLocaleDateString('ko-KR', {year:'numeric',month:'long',day:'numeric'})}</div>
+              </div>
+            </div>
+            <div style="font-size:14px;line-height:1.75;color:#333;white-space:pre-wrap;">${escape(notice.body)}</div>
+            ${notice.expire_at ? `<div style="margin-top:12px;font-size:11px;color:#aaa;">이 공지는 ${new Date(notice.expire_at).toLocaleDateString('ko-KR', {month:'long',day:'numeric', hour:'2-digit',minute:'2-digit'})}까지 표시됩니다.</div>` : ''}
+          </div>
+          <div style="padding:12px 20px 20px;display:flex;gap:8px;">
+            <button id="noticeClose" style="flex:1;padding:12px;background:#111;color:#fff;border:none;border-radius:11px;font-size:14px;font-weight:700;font-family:inherit;cursor:pointer;">확인</button>
+          </div>
+        </div>
+      `;
+      document.body.appendChild(overlay);
+      document.body.style.overflow = 'hidden';
+      function closeNotice() {
+        localStorage.setItem(seenKey, '1');
+        overlay.remove();
+        document.body.style.overflow = '';
+      }
+      document.getElementById('noticeClose').addEventListener('click', closeNotice);
+      overlay.addEventListener('click', e => { if (e.target === overlay) closeNotice(); });
+    } catch(e) { /* 공지 없거나 오류 — 무시 */ }
   }
 
   // Boot
