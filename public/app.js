@@ -2071,7 +2071,10 @@
         `}
         <div class="modal-actions">
           <button class="btn btn-ghost-light" data-action="close">닫기</button>
-          ${allowPickup ? `<button class="btn" data-action="pickup">수령 완료 · 다음</button>` : ''}
+          ${allowPickup ? (order.status === 'picked_up'
+            ? `<button class="btn btn-picked" disabled>✓ 수령완료</button>`
+            : `<button class="btn" data-action="pickup">수령 완료 · 다음</button>`)
+            : ''}
         </div>
       `;
 
@@ -2116,10 +2119,9 @@
         await api(`/api/orders/${order.id}/pickup`, { method: 'POST' });
         toast(`${order.name}님 수령 완료`);
         dataChanged = true;
-        orders.splice(idx, 1);
-        if (orders.length === 0) { close(); return; }
-        if (idx >= orders.length) idx = orders.length - 1;
-        renderCard(1);
+        // 목록에서 제거하지 않고 status만 갱신 → 바코드/사번 그대로 유지
+        order.status = 'picked_up';
+        renderCard(0);
       } catch (e) {
         toast(e.message);
         if (btn) { btn.disabled = false; btn.textContent = '수령 완료 · 다음'; }

@@ -2316,3 +2316,12 @@ input, textarea { font-family: inherit; }
   padding: 8px 12px;
   text-align: center;
 }
+
+/* 수령완료 버튼 상태 */
+.btn-picked {
+  background: #e8f5e9;
+  color: #388e3c;
+  border: none;
+  cursor: default;
+  opacity: 1;
+}
