@@ -563,20 +563,12 @@ input, textarea { font-family: inherit; }
 }
 .barcode-wrap svg { width: 100%; max-width: 340px; height: auto; }
 
-/* 세로 바코드 모드 — 명찰처럼 작은 사이즈, 90도 회전, 중앙 배치 */
+/* 세로 바코드 모드 — 회전/크기는 JS에서 인라인으로 제어, 여기선 레이아웃만 */
 .barcode-wrap.vertical {
-  /* 회전 후 점유 높이 확보: 명찰의 세로 바코드 정도 크기 */
-  min-height: 260px;
   justify-content: center;
+  align-items: center;
   padding: 16px 24px;
-}
-.barcode-wrap.vertical svg {
-  width: auto;
-  max-width: none;
-  /* 회전 전 가로폭 = 회전 후 높이. 명찰 사이즈에 맞춰 적당히 */
-  max-height: 220px;
-  transform: rotate(90deg);
-  transform-origin: center center;
+  overflow: visible;
 }
 
 /* 가로/세로 전환 버튼 */

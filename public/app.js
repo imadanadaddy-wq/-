@@ -1988,12 +1988,27 @@
 
       if (!isLateNight) {
         try {
-          // 세로 모드: 명찰처럼 작은 사이즈 (height/width 작게) → CSS rotate로 세로 전환
-          // 가로 모드: 기존처럼 넓게
+          const svg = card.querySelector('.barcode-svg');
+          // 세로 모드: 명찰처럼 작은 사이즈 / 가로 모드: 넓게
           const opts = isVertical
-            ? { format: 'CODE128', displayValue: false, height: 60, width: 1.6, margin: 4, background: '#ffffff', lineColor: '#000000' }
+            ? { format: 'CODE128', displayValue: false, height: 70, width: 1.8, margin: 4, background: '#ffffff', lineColor: '#000000' }
             : { format: 'CODE128', displayValue: false, height: 90, width: 2, margin: 6, background: '#ffffff', lineColor: '#000000' };
-          JsBarcode(card.querySelector('.barcode-svg'), String(order.employee_id || user.employee_id), opts);
+          JsBarcode(svg, String(order.employee_id || user.employee_id), opts);
+
+          if (isVertical) {
+            // JsBarcode가 박아넣은 인라인 width/height(px) 읽어서 회전 적용
+            const w = parseFloat(svg.getAttribute('width')) || svg.getBoundingClientRect().width;
+            const h = parseFloat(svg.getAttribute('height')) || svg.getBoundingClientRect().height;
+            // 인라인 속성 제거 후 명시적 px 지정 (CSS %가 회전과 충돌하지 않도록)
+            svg.removeAttribute('style');
+            svg.style.width = w + 'px';
+            svg.style.height = h + 'px';
+            svg.style.transform = 'rotate(90deg)';
+            svg.style.transformOrigin = 'center center';
+            // 회전 후 점유 높이 = 원래 width → wrap 높이를 그만큼 확보
+            const wrap = card.querySelector('.barcode-wrap');
+            if (wrap) wrap.style.minHeight = w + 'px';
+          }
         } catch (e) { console.error('barcode error', e); }
 
         // 방향 전환 버튼 이벤트
