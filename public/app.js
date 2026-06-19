@@ -1713,9 +1713,9 @@
           openOrderViewer(list, startIdx, {
             allowPickup: true,
             onDataChanged: () => {
-              // activeOrders는 재조회 않음 (picked_up 항목도 목록에 유지)
-              // summary만 갱신해서 날짜 칩 카운트 반영
-              loadActiveSummary().then(() => renderActing());
+              // activeOrders 재조회 없이 현재 상태 그대로 목록 재렌더
+              // (doPickup에서 이미 order.status = 'picked_up' 반영됨)
+              renderActingList();
             }
           });
         }
