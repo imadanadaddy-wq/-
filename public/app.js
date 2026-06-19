@@ -1385,11 +1385,6 @@
           <span class="count">오늘 ${countFor('late_night', today)} · 내일 ${countFor('late_night', tomorrow)}</span>
         </button>
       </div>
-      <div style="margin-top:12px;">
-        <button class="btn btn-ghost btn-sm" id="goTestTab" style="width:100%;font-size:12px;color:var(--muted);">
-          🧪 바코드 세로 인식 테스트
-        </button>
-      </div>
     `;
 
     $('#switchRole').addEventListener('click', () => { saveRole(null); render(); });
@@ -1400,140 +1395,6 @@
         actingStep = 'list';
         renderActing();
       }));
-    $('#goTestTab')?.addEventListener('click', () => {
-      actingStep = 'test';
-      renderActing();
-    });
-  }
-
-  async function renderActingTest() {
-    // ===== 액팅 바코드 세로 인식 테스트 탭 =====
-    const today = todayStr();
-
-    // 오늘 pending 주문 불러오기 (breakfast + late_night 합산)
-    let todayOrders = [];
-    try {
-      const [bf, ln] = await Promise.all([
-        api(`/api/orders/active?meal_type=breakfast&date=${today}`).catch(() => []),
-        api(`/api/orders/active?meal_type=late_night&date=${today}`).catch(() => []),
-      ]);
-      todayOrders = [...bf, ...ln];
-    } catch { todayOrders = []; }
-
-    // 메뉴 요약 (한 줄)
-    function menuSummary(o) {
-      const sel = o.selection;
-      if (o.meal_type === 'breakfast' && sel) {
-        if (sel.meal_form === 'kimbap') return sel.kimbap_choice || '김밥';
-        if (sel.meal_form === 'no_meal') return '미수령';
-        if (sel.meal_form === 'snack_pick') {
-          const tiers = (sel.priorities || []).map(p => p.slot_name || p.category_name).filter(Boolean);
-          return tiers.slice(0, 2).join(' / ') || '조식';
-        }
-      }
-      if (o.meal_type === 'late_night') {
-        const ln = o.selection?.late_night_priority;
-        if (Array.isArray(ln) && ln.length > 0) return ln.map(x => x.menu_name).join(' / ');
-        return o.menu || '야식';
-      }
-      return o.menu || '';
-    }
-
-    // 현재 뷰어 인덱스 (스와이프)
-    let testIdx = 0;
-    const orders = todayOrders;
-
-    function renderTestCard() {
-      const cardWrap = document.getElementById('testCardWrap');
-      if (!cardWrap) return;
-
-      if (orders.length === 0) {
-        cardWrap.innerHTML = `<div style="text-align:center;padding:32px;color:var(--muted);font-size:14px;">오늘 신청 내역이 없습니다</div>`;
-        return;
-      }
-
-      const o = orders[testIdx];
-      const summary = menuSummary(o);
-
-      cardWrap.innerHTML = `
-        <div class="test-barcode-card">
-          <div class="tbc-name">${escape(o.name)}</div>
-          <div class="tbc-eid">사번 ${escape(String(o.employee_id))}</div>
-          <div class="tbc-barcode-wrap">
-            <svg class="tbc-barcode-svg"></svg>
-          </div>
-          <div class="tbc-menu">${escape(summary)}</div>
-        </div>
-        <div class="viewer-nav" style="margin-top:8px;">
-          <button class="nav-btn" id="testPrev" ${testIdx === 0 ? 'disabled' : ''}>‹</button>
-          <div class="viewer-indicator">
-            <span>${orders.length > 1 ? `${testIdx + 1} / ${orders.length}` : ''}</span>
-            <span class="swipe-hint">${orders.length > 1 ? '← swipe →' : ''}</span>
-          </div>
-          <button class="nav-btn" id="testNext" ${testIdx === orders.length - 1 ? 'disabled' : ''}>›</button>
-        </div>
-      `;
-
-      // 세로 바코드 렌더링: JsBarcode로 생성 후 90° 회전
-      try {
-        const svg = cardWrap.querySelector('.tbc-barcode-svg');
-        JsBarcode(svg, String(o.employee_id), {
-          format: 'CODE128',
-          displayValue: false,
-          height: 200,   // 회전 전 height → 회전 후 가로 폭
-          width: 2,
-          margin: 10,
-          background: '#ffffff',
-          lineColor: '#000000',
-        });
-        // SVG 원래 크기 읽어서 rotate 후 컨테이너 맞춤
-        if (svg) {
-          const svgW = svg.viewBox.baseVal.width || svg.getBoundingClientRect().width;
-          const svgH = svg.viewBox.baseVal.height || svg.getBoundingClientRect().height;
-          // 회전하면 가로↔세로 교체 → 컨테이너 높이를 원래 폭으로 맞춤
-          svg.style.transform = 'rotate(90deg)';
-          svg.style.transformOrigin = 'center center';
-          // 부모 wrap 높이 강제 설정 (회전 후 실제 점유 높이)
-          const wrap = cardWrap.querySelector('.tbc-barcode-wrap');
-          if (wrap && svgW > 0) wrap.style.minHeight = `${svgW}px`;
-        }
-      } catch (e) { console.error('barcode error', e); }
-
-      // 네비게이션 이벤트
-      document.getElementById('testPrev')?.addEventListener('click', () => {
-        if (testIdx > 0) { testIdx--; renderTestCard(); }
-      });
-      document.getElementById('testNext')?.addEventListener('click', () => {
-        if (testIdx < orders.length - 1) { testIdx++; renderTestCard(); }
-      });
-
-      // 스와이프 제스처
-      let touchStartX = 0;
-      cardWrap.addEventListener('touchstart', e => { touchStartX = e.changedTouches[0].clientX; }, { passive: true });
-      cardWrap.addEventListener('touchend', e => {
-        const dx = e.changedTouches[0].clientX - touchStartX;
-        if (Math.abs(dx) > 40) {
-          if (dx < 0 && testIdx < orders.length - 1) { testIdx++; renderTestCard(); }
-          else if (dx > 0 && testIdx > 0) { testIdx--; renderTestCard(); }
-        }
-      }, { passive: true });
-    }
-
-    root.innerHTML = `
-      ${renderBrand()}
-      <div class="topbar">
-        <button class="btn btn-ghost btn-sm" id="backBtn">← 뒤로</button>
-        <h1 style="font-size:15px;">🧪 바코드 테스트</h1>
-        <span style="width:60px;"></span>
-      </div>
-      <p style="margin:4px 4px 16px;color:var(--muted);font-size:12px;">
-        세로 바코드 인식률 테스트용 · 오늘(${today}) 신청 ${orders.length}건
-      </p>
-      <div id="testCardWrap"></div>
-    `;
-
-    $('#backBtn').addEventListener('click', () => { actingStep = 'choose'; render(); });
-    renderTestCard();
   }
 
   async function renderActingList() {
@@ -1542,16 +1403,21 @@
       activeSummary.filter(x => x.meal_type === actingMealType).map(x => x.service_date)
     );
 
-    // Compute counts per category
     const isBreakfast = actingMealType === 'breakfast';
+
+    // Split into pending vs picked_up
+    const pendingOrders = activeOrders.filter(o => o.status !== 'picked_up');
+    const pickedOrders  = activeOrders.filter(o => o.status === 'picked_up');
+
+    // Compute counts (pending only) per category for filter tabs
     const counts = {
-      all: activeOrders.length,
+      all: pendingOrders.length,
       snack_pick: 0,
       kimbap: 0,
       no_meal: 0,
       other: 0,
     };
-    for (const o of activeOrders) {
+    for (const o of pendingOrders) {
       const form = o.selection && o.selection.meal_form;
       if (form === 'snack_pick') counts.snack_pick++;
       else if (form === 'kimbap') counts.kimbap++;
@@ -1559,32 +1425,36 @@
       else counts.other++;
     }
 
-    // Apply filter
-    const filtered = activeOrders.filter(o => {
+    // Apply filter to pending orders only
+    const filtered = pendingOrders.filter(o => {
       if (actingFilter === 'all') return true;
       const form = o.selection && o.selection.meal_form;
       return form === actingFilter;
     });
 
-    // Group orders (only relevant for breakfast and "all" view)
-    const groups = [];
-    if (isBreakfast && actingFilter === 'all') {
-      const byForm = { snack_pick: [], kimbap: [], no_meal: [], other: [] };
-      for (const o of filtered) {
-        const form = (o.selection && o.selection.meal_form) || 'other';
-        (byForm[form] || byForm.other).push(o);
+    // Group pending orders
+    const buildGroups = (orders) => {
+      const groups = [];
+      if (isBreakfast && actingFilter === 'all') {
+        const byForm = { snack_pick: [], kimbap: [], no_meal: [], other: [] };
+        for (const o of orders) {
+          const form = (o.selection && o.selection.meal_form) || 'other';
+          (byForm[form] || byForm.other).push(o);
+        }
+        if (byForm.snack_pick.length) groups.push({ key: 'snack_pick', label: '🥣 스낵픽', items: byForm.snack_pick });
+        if (byForm.kimbap.length) groups.push({ key: 'kimbap', label: '🍙 김밥/주먹밥', items: byForm.kimbap });
+        if (byForm.no_meal.length) groups.push({ key: 'no_meal', label: '🙅‍♀️ 미수령 (식사 안 받음)', items: byForm.no_meal });
+        if (byForm.other.length) groups.push({ key: 'other', label: '기타', items: byForm.other });
+      } else {
+        groups.push({ key: actingFilter, label: '', items: orders });
       }
-      if (byForm.snack_pick.length) groups.push({ key: 'snack_pick', label: '🥣 스낵픽', items: byForm.snack_pick });
-      if (byForm.kimbap.length) groups.push({ key: 'kimbap', label: '🍙 김밥/주먹밥', items: byForm.kimbap });
-      if (byForm.no_meal.length) groups.push({ key: 'no_meal', label: '🙅‍♀️ 미수령 (식사 안 받음)', items: byForm.no_meal });
-      if (byForm.other.length) groups.push({ key: 'other', label: '기타', items: byForm.other });
-    } else {
-      // Single-group view (filter selected) or non-breakfast
-      groups.push({ key: actingFilter, label: '', items: filtered });
-    }
+      return groups;
+    };
 
-    // Pickup-able orders only (for viewer; no_meal doesn't have anything to pick up)
-    const pickupableOrders = activeOrders.filter(o => {
+    const pendingGroups = buildGroups(filtered);
+
+    // Pickup-able pending orders only (for barcode viewer; no_meal doesn't have barcode)
+    const pickupableOrders = pendingOrders.filter(o => {
       const form = o.selection && o.selection.meal_form;
       return form !== 'no_meal';
     });
@@ -1596,6 +1466,38 @@
         <span class="af-label">${emoji}${label}</span>
         <span class="af-count">${n}</span>
       </button>`;
+    };
+
+    // Render a single order card
+    const renderCard = (o, isPicked) => {
+      const isNoMeal = o.selection && o.selection.meal_form === 'no_meal';
+      const isLateNight = o.meal_type === 'late_night';
+      const showQuickPickup = !isPicked && isLateNight && !isNoMeal;
+      const pickedTime = isPicked && o.picked_up_at
+        ? new Date(o.picked_up_at + 'Z').toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })
+        : null;
+      return `
+        <div class="order-card ${isNoMeal ? 'no-meal' : ''} ${showQuickPickup ? 'with-quick' : ''} ${isPicked ? 'picked-up-card' : ''}" data-card-id="${o.id}">
+          <div class="order-main${isPicked ? '' : ''}" data-id="${o.id}" ${isPicked ? 'data-picked="true"' : ''}>
+            <div class="meal-badge ${o.meal_type}">${isNoMeal ? '🙅‍♀️' : mealEmoji(o.meal_type)}</div>
+            <div class="order-body">
+              <div class="order-name">
+                ${escape(o.name)}
+                <span class="order-eid">${escape(o.employee_id)}</span>
+                ${isPicked ? `<span class="pickup-badge">✓ 수령완료${pickedTime ? ' ' + pickedTime : ''}</span>` : ''}
+              </div>
+              ${renderOrderDetailDark(o)}
+            </div>
+            ${showQuickPickup ? '' : (isPicked ? '' : '<div class="order-chevron">›</div>')}
+          </div>
+          ${showQuickPickup ? `
+            <button class="quick-pickup" data-quick-pickup="${o.id}" aria-label="수령 완료">
+              <span class="qp-check">✓</span>
+              <span class="qp-text">수령<br/>완료</span>
+            </button>
+          ` : ''}
+        </div>
+      `;
     };
 
     root.innerHTML = `
@@ -1624,7 +1526,7 @@
       ` : ''}
 
       <div class="section-title">
-        <h2>${actingFilter === 'all' ? `대기 중 (${filtered.length}건)` : `${filtered.length}건`}</h2>
+        <h2>대기 중 (${filtered.length}건)</h2>
         <span class="hint">탭하면 바코드</span>
       </div>
 
@@ -1635,38 +1537,20 @@
             ${fmtDate(actingDate)} ${mealLabel(actingMealType)}
             ${actingFilter === 'all' ? '신청이 없어요' : '에 해당하는 신청이 없어요'}
           </div>
-        ` : groups.map(g => `
+        ` : pendingGroups.map(g => `
           ${g.label ? `<div class="group-header">${g.label} <span class="group-count">${g.items.length}</span></div>` : ''}
-          ${g.items.map(o => {
-            const isNoMeal = o.selection && o.selection.meal_form === 'no_meal';
-            const isLateNight = o.meal_type === 'late_night';
-            const showQuickPickup = isLateNight && !isNoMeal;
-            const isPicked = o.status === 'picked_up';
-            return `
-              <div class="order-card ${isNoMeal ? 'no-meal' : ''} ${showQuickPickup ? 'with-quick' : ''} ${isPicked ? 'order-done' : ''}" data-card-id="${o.id}">
-                <div class="order-main" data-id="${o.id}">
-                  <div class="meal-badge ${o.meal_type}">${isNoMeal ? '🙅‍♀️' : mealEmoji(o.meal_type)}</div>
-                  <div class="order-body">
-                    <div class="order-name">
-                      ${escape(o.name)}
-                      <span class="order-eid">${escape(o.employee_id)}</span>
-                      ${isPicked ? '<span class="done-badge">✓ 수령완료</span>' : ''}
-                    </div>
-                    ${renderOrderDetailDark(o)}
-                  </div>
-                  ${showQuickPickup ? '' : (isPicked ? '' : '<div class="order-chevron">›</div>')}
-                </div>
-                ${showQuickPickup ? `
-                  <button class="quick-pickup ${isPicked ? 'done' : ''}" data-quick-pickup="${o.id}" aria-label="수령 완료" ${isPicked ? 'disabled' : ''}>
-                    <span class="qp-check">✓</span>
-                    <span class="qp-text">수령<br/>완료</span>
-                  </button>
-                ` : ''}
-              </div>
-            `;
-          }).join('')}
+          ${g.items.map(o => renderCard(o, false)).join('')}
         `).join('')}
       </div>
+
+      ${pickedOrders.length > 0 ? `
+        <div class="section-title" style="margin-top:20px;">
+          <h2 style="color:#4caf50;">✓ 수령 완료 (${pickedOrders.length}건)</h2>
+        </div>
+        <div class="order-list">
+          ${pickedOrders.map(o => renderCard(o, true)).join('')}
+        </div>
+      ` : ''}
     `;
 
     $('#backBtn').addEventListener('click', () => { actingStep = 'choose'; render(); });
@@ -1688,6 +1572,8 @@
     document.querySelectorAll('.order-main').forEach(c =>
       c.addEventListener('click', () => {
         const id = Number(c.dataset.id);
+        // Already picked up — don't open anything
+        if (c.dataset.picked === 'true') return;
         // Find the order
         const order = activeOrders.find(o => o.id === id);
         if (!order) return;
@@ -1712,10 +1598,9 @@
         if (startIdx >= 0) {
           openOrderViewer(list, startIdx, {
             allowPickup: true,
-            onDataChanged: () => {
-              // activeOrders 재조회 없이 현재 상태 그대로 목록 재렌더
-              // (doPickup에서 이미 order.status = 'picked_up' 반영됨)
-              renderActingList();
+            onDataChanged: async () => {
+              await Promise.all([loadActiveOrders(), loadActiveSummary()]);
+              renderActing();
             }
           });
         }
@@ -1773,11 +1658,11 @@
             </div>
           ` : ''}
           <p style="margin-top:14px;font-size:12px;color:#666;line-height:1.5;">
-            확인을 누르면 목록에서 제거되어 더 이상 액팅 화면에 보이지 않습니다.
+            확인을 누르면 수령 완료로 처리됩니다. 목록에는 계속 표시됩니다.
           </p>
           <div class="modal-actions" style="margin-top:16px;">
             <button class="btn btn-ghost-light" data-close>닫기</button>
-            <button class="btn" data-confirm-no-meal>확인 (제거)</button>
+            <button class="btn" data-confirm-no-meal>확인 (수령 완료)</button>
           </div>
         </div>
       </div>
@@ -1814,7 +1699,6 @@
 
   function renderActing() {
     if (actingStep === 'choose') renderActingChoose();
-    else if (actingStep === 'test') renderActingTest();
     else renderActingList();
   }
 
@@ -2071,10 +1955,7 @@
         `}
         <div class="modal-actions">
           <button class="btn btn-ghost-light" data-action="close">닫기</button>
-          ${allowPickup ? (order.status === 'picked_up'
-            ? `<button class="btn btn-picked" disabled>✓ 수령완료</button>`
-            : `<button class="btn" data-action="pickup">수령 완료 · 다음</button>`)
-            : ''}
+          ${allowPickup ? `<button class="btn" data-action="pickup">수령 완료 · 다음</button>` : ''}
         </div>
       `;
 
@@ -2119,18 +2000,10 @@
         await api(`/api/orders/${order.id}/pickup`, { method: 'POST' });
         toast(`${order.name}님 수령 완료`);
         dataChanged = true;
-        // 목록에서 제거하지 않고 status만 갱신 → 바코드/사번 그대로 유지
-        order.status = 'picked_up';
-        // activeOrders에서도 동일 order status 갱신 (목록 재조회 없이 유지)
-        const ao = activeOrders.find(o => o.id === order.id);
-        if (ao) ao.status = 'picked_up';
-        // 다음 사람으로 이동 (마지막이면 현재 카드 재렌더)
-        if (idx < orders.length - 1) {
-          idx++;
-          renderCard(1);
-        } else {
-          renderCard(0);
-        }
+        orders.splice(idx, 1);
+        if (orders.length === 0) { close(); return; }
+        if (idx >= orders.length) idx = orders.length - 1;
+        renderCard(1);
       } catch (e) {
         toast(e.message);
         if (btn) { btn.disabled = false; btn.textContent = '수령 완료 · 다음'; }

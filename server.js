@@ -1304,7 +1304,6 @@ app.delete('/api/orders/:id', (req, res) => {
   const order = db.prepare('SELECT * FROM meal_orders WHERE id = ?').get(orderId);
   if (!order) return res.status(404).json({ error: '주문을 찾을 수 없습니다' });
   if (order.user_id !== user.id) return res.status(403).json({ error: '본인 주문만 취소 가능합니다' });
-  if (order.status === 'picked_up') return res.status(400).json({ error: '이미 수령 완료된 주문은 취소할 수 없습니다' });
 
   db.prepare('DELETE FROM meal_orders WHERE id = ?').run(orderId);
   res.json({ ok: true });
@@ -1315,7 +1314,8 @@ app.get('/api/orders/active', (req, res) => {
   if (!user) return;
 
   const { meal_type, date } = req.query;
-  const conds = ["mo.status = 'pending'"];
+  // Show ALL orders (pending + picked_up) so the acting view never loses entries
+  const conds = ["mo.status IN ('pending', 'picked_up')"];
   const params = [];
 
   if (meal_type) {
@@ -1331,11 +1331,14 @@ app.get('/api/orders/active', (req, res) => {
 
   const orders = db.prepare(`
     SELECT mo.id, mo.meal_type, mo.menu, mo.selection, mo.service_date, mo.created_at,
+           mo.status, mo.picked_up_at,
            u.employee_id, u.name
     FROM meal_orders mo
     JOIN users u ON mo.user_id = u.id
     WHERE ${conds.join(' AND ')}
-    ORDER BY mo.service_date, mo.meal_type, mo.created_at
+    ORDER BY mo.service_date, mo.meal_type,
+             CASE mo.status WHEN 'pending' THEN 0 ELSE 1 END,
+             mo.created_at
   `).all(...params);
   res.json(orders.map(decorateOrder));
 });
@@ -1347,7 +1350,7 @@ app.get('/api/orders/active/summary', (req, res) => {
   const rows = db.prepare(`
     SELECT service_date, meal_type, COUNT(*) AS n
     FROM meal_orders
-    WHERE status = 'pending'
+    WHERE status IN ('pending', 'picked_up')
       AND service_date >= date('now', 'localtime')
       AND service_date <= date('now', 'localtime', '+${days} days')
     GROUP BY service_date, meal_type
