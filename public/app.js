@@ -347,13 +347,11 @@
       ` : `
         <div class="section-title" style="margin-top:14px;">
           <h2>내 신청 현황</h2>
-          <span class="hint">${sorted.filter(o => o.status === 'pending' && o.meal_type === 'breakfast').length > 0 ? `탭하면 바코드 · ` : ''}${sorted.length}건</span>
+          <span class="hint">${sorted.some(o => o.meal_type === 'breakfast') ? `탭하면 바코드 · ` : ''}${sorted.length}건</span>
         </div>
         <div class="my-orders-list">
-          ${sorted.map((o, i) => {
-            const isPicked = o.status === 'picked_up';
-            return `
-            <div class="my-order-row${isPicked ? ' my-order-picked' : ''}">
+          ${sorted.map((o, i) => `
+            <div class="my-order-row">
               ${o.meal_type === 'late_night' ? `
                 <div class="my-order-main my-order-static">
                   <div class="meal-badge ${o.meal_type}">${mealEmoji(o.meal_type)}</div>
@@ -361,21 +359,20 @@
                     <div class="date">${fmtFull(o.service_date)} · ${mealLabel(o.meal_type)}</div>
                     <div class="menu">${escape(o.menu)}</div>
                   </div>
-                  ${isPicked ? '<span class="picked-badge">✓ 수령완료</span>' : ''}
                 </div>
               ` : `
-                <button class="my-order-main${isPicked ? ' picked' : ''}" ${isPicked ? '' : `data-view-idx="${i}"`}>
+                <button class="my-order-main" data-view-idx="${i}">
                   <div class="meal-badge ${o.meal_type}">${mealEmoji(o.meal_type)}</div>
                   <div class="info">
                     <div class="date">${fmtFull(o.service_date)} · ${mealLabel(o.meal_type)}</div>
                     <div class="menu">${o.selection ? escape(summarizeSelection(o.selection)) : escape(o.menu)}</div>
                   </div>
-                  ${isPicked ? '<span class="picked-badge">✓ 수령완료</span>' : '<span class="view-hint">바코드 ›</span>'}
+                  <span class="view-hint">바코드 ›</span>
                 </button>
               `}
-              ${isPicked ? '' : `<button class="x" data-cancel-id="${o.id}" title="취소">✕</button>`}
+              <button class="x" data-cancel-id="${o.id}" title="취소">✕</button>
             </div>
-          `}).join('')}
+          `).join('')}
         </div>
 
         <div style="margin-top:18px;">

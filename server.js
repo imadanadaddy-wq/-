@@ -1290,9 +1290,7 @@ app.get('/api/orders/my', (req, res) => {
 
   const orders = db.prepare(`
     SELECT * FROM meal_orders
-    WHERE user_id = ?
-      AND status IN ('pending', 'picked_up')
-      AND service_date >= ?
+    WHERE user_id = ? AND status = 'pending' AND service_date >= ?
     ORDER BY service_date, meal_type
   `).all(user.id, fromDate);
   res.json(orders.map(decorateOrder));
