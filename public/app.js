@@ -1385,6 +1385,17 @@
           <span class="count">오늘 ${countFor('late_night', today)} · 내일 ${countFor('late_night', tomorrow)}</span>
         </button>
       </div>
+
+      <div style="margin-top:8px;padding:0 4px;">
+        <button class="choice-card vb-tab-card" id="openVbTab" style="width:100%;flex-direction:row;gap:14px;padding:16px 20px;justify-content:flex-start;">
+          <span style="font-size:28px;">🆔</span>
+          <div style="text-align:left;">
+            <div style="font-size:15px;font-weight:700;color:var(--text);">세로 바코드 테스트</div>
+            <div style="font-size:12px;color:var(--muted);margin-top:2px;">조식 바코드가 안 찍힐 때 · 사원증 형태</div>
+          </div>
+          <span style="margin-left:auto;color:#aaa;font-size:20px;">›</span>
+        </button>
+      </div>
     `;
 
     $('#switchRole').addEventListener('click', () => { saveRole(null); render(); });
@@ -1395,6 +1406,13 @@
         actingStep = 'list';
         renderActing();
       }));
+    $('#openVbTab').addEventListener('click', async () => {
+      actingMealType = 'breakfast';
+      actingDate = todayStr();
+      actingStep = 'vb';
+      await Promise.all([loadActiveOrders(), loadActiveSummary()]);
+      renderActing();
+    });
   }
 
   async function renderActingList() {
@@ -1476,9 +1494,11 @@
       const pickedTime = isPicked && o.picked_up_at
         ? new Date(o.picked_up_at + 'Z').toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })
         : null;
+      // Picked-up breakfast (non-no_meal) cards still show chevron — they can be tapped to see barcode
+      const showChevron = !showQuickPickup && !(isPicked && (isNoMeal || isLateNight)) && !(!isPicked && isNoMeal);
       return `
         <div class="order-card ${isNoMeal ? 'no-meal' : ''} ${showQuickPickup ? 'with-quick' : ''} ${isPicked ? 'picked-up-card' : ''}" data-card-id="${o.id}">
-          <div class="order-main${isPicked ? '' : ''}" data-id="${o.id}" ${isPicked ? 'data-picked="true"' : ''}>
+          <div class="order-main" data-id="${o.id}" ${isPicked ? 'data-picked="true"' : ''}>
             <div class="meal-badge ${o.meal_type}">${isNoMeal ? '🙅‍♀️' : mealEmoji(o.meal_type)}</div>
             <div class="order-body">
               <div class="order-name">
@@ -1488,7 +1508,7 @@
               </div>
               ${renderOrderDetailDark(o)}
             </div>
-            ${showQuickPickup ? '' : (isPicked ? '' : '<div class="order-chevron">›</div>')}
+            ${showChevron ? '<div class="order-chevron">›</div>' : ''}
           </div>
           ${showQuickPickup ? `
             <button class="quick-pickup" data-quick-pickup="${o.id}" aria-label="수령 완료">
@@ -1572,11 +1592,19 @@
     document.querySelectorAll('.order-main').forEach(c =>
       c.addEventListener('click', () => {
         const id = Number(c.dataset.id);
-        // Already picked up — don't open anything
-        if (c.dataset.picked === 'true') return;
+        const isPicked = c.dataset.picked === 'true';
         // Find the order
         const order = activeOrders.find(o => o.id === id);
         if (!order) return;
+
+        // Picked-up breakfast cards: open barcode viewer in read-only mode (no pickup btn)
+        if (isPicked) {
+          if (order.meal_type === 'breakfast' && !(order.selection && order.selection.meal_form === 'no_meal')) {
+            openOrderViewer([order], 0, { allowPickup: false });
+          }
+          return;
+        }
+
         // no_meal orders open in a simpler info modal (no barcode pickup loop)
         if (order.selection && order.selection.meal_form === 'no_meal') {
           openNoMealInfo(order, {
@@ -1699,6 +1727,7 @@
 
   function renderActing() {
     if (actingStep === 'choose') renderActingChoose();
+    else if (actingStep === 'vb') renderActingVerticalTab();
     else renderActingList();
   }
 
@@ -2090,6 +2119,339 @@
 
     renderCard(0);
     return { close };
+  }
+
+  // ===== VERTICAL BARCODE VIEWER (세로 바코드 — 조식 테스트용) =====
+  // Opens a fullscreen vertical barcode modal styled like a staff ID card.
+  // Supports swipe/arrow navigation and optional pickup button.
+  function openVerticalBarcodeViewer(initialOrders, startIndex = 0, opts = {}) {
+    if (!initialOrders || initialOrders.length === 0) {
+      toast('표시할 항목이 없습니다');
+      return;
+    }
+    const allowPickup = !!opts.allowPickup;
+    let orders = [...initialOrders];
+    let idx = Math.max(0, Math.min(startIndex, orders.length - 1));
+    let dataChanged = false;
+
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay vbc-overlay';
+    overlay.innerHTML = `
+      <div class="vbc-modal" role="dialog" aria-modal="true">
+        <div class="vbc-header-bar">
+          <button class="vbc-close-btn" data-action="close" aria-label="닫기">✕</button>
+          <span class="vbc-counter" id="vbcCounter"></span>
+        </div>
+        <div class="vbc-content" id="vbcContent"></div>
+        <div class="vbc-footer">
+          <button class="vbc-nav-btn" id="vbcPrev">‹</button>
+          <div class="vbc-actions" id="vbcActions"></div>
+          <button class="vbc-nav-btn" id="vbcNext">›</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+    document.body.style.overflow = 'hidden';
+
+    const content = overlay.querySelector('#vbcContent');
+    const prevBtn = overlay.querySelector('#vbcPrev');
+    const nextBtn = overlay.querySelector('#vbcNext');
+    const counterEl = overlay.querySelector('#vbcCounter');
+    const actionsEl = overlay.querySelector('#vbcActions');
+
+    function buildMenuText(order) {
+      const sel = order.selection;
+      if (!sel) return order.menu || '';
+      if (sel.meal_form === 'kimbap') return `🍙 ${sel.kimbap_choice || ''}${sel.note ? ' · ' + sel.note : ''}`;
+      if (sel.meal_form === 'snack_pick') {
+        const prios = Array.isArray(sel.category_priorities) ? sel.category_priorities : [];
+        return prios.map((cc, i) => {
+          const cat = breakfastStructure.find(c => c.id === Number(cc.category_id));
+          const em = (cat && cat.emoji) || cc.category_emoji || '';
+          const nm = (cat && cat.name) || cc.category_name || '';
+          return `${i+1}순위 ${em}${nm}`;
+        }).join(' / ') + (sel.fallback_any ? ' / 🎲아무거나' : '') + (sel.note ? ` 📝${sel.note}` : '');
+      }
+      return order.menu || '';
+    }
+
+    function renderVCard(animDir = 0) {
+      if (orders.length === 0) { close(); return; }
+      if (idx >= orders.length) idx = orders.length - 1;
+      const order = orders[idx];
+      const menuText = buildMenuText(order);
+      const dateStr = order.service_date
+        ? new Date(order.service_date).toLocaleDateString('ko-KR', { month: 'long', day: 'numeric' })
+        : '';
+
+      const card = document.createElement('div');
+      card.className = 'vbc-card';
+      if (animDir > 0) card.classList.add('vbc-enter-right');
+      else if (animDir < 0) card.classList.add('vbc-enter-left');
+
+      card.innerHTML = `
+        <div class="vbc-top">
+          <div class="vbc-date">${dateStr} 조식</div>
+          <div class="vbc-name">${escape(order.name)}</div>
+          <div class="vbc-eid">사번 ${escape(order.employee_id)}</div>
+        </div>
+        <div class="vbc-barcode-area">
+          <svg class="vbc-svg"></svg>
+        </div>
+        <div class="vbc-menu">${escape(menuText)}</div>
+      `;
+
+      content.innerHTML = '';
+      content.appendChild(card);
+
+      try {
+        JsBarcode(card.querySelector('.vbc-svg'), String(order.employee_id), {
+          format: 'CODE128',
+          displayValue: false,
+          width: 3.2,
+          height: 180,
+          margin: 10,
+          background: '#ffffff',
+          lineColor: '#111111',
+        });
+      } catch (e) { console.error('vbc barcode error', e); }
+
+      counterEl.textContent = orders.length > 1 ? `${idx + 1} / ${orders.length}` : '';
+      prevBtn.style.visibility = orders.length > 1 ? 'visible' : 'hidden';
+      nextBtn.style.visibility = orders.length > 1 ? 'visible' : 'hidden';
+      prevBtn.disabled = idx === 0;
+      nextBtn.disabled = idx === orders.length - 1;
+
+      // Update action buttons
+      actionsEl.innerHTML = allowPickup
+        ? `<button class="btn vbc-pickup-btn" id="vbcPickup">✓ 수령 완료 · 다음</button>`
+        : `<button class="btn btn-ghost-light vbc-close-action" data-action="close">닫기</button>`;
+
+      if (allowPickup) {
+        overlay.querySelector('#vbcPickup').addEventListener('click', doPickup);
+      }
+    }
+
+    function go(dir) {
+      if (dir < 0 && idx > 0) { idx--; renderVCard(-1); }
+      else if (dir > 0 && idx < orders.length - 1) { idx++; renderVCard(1); }
+      else {
+        const card = content.firstElementChild;
+        if (card) {
+          card.style.transition = 'transform .12s';
+          card.style.transform = `translateX(${dir > 0 ? -14 : 14}px)`;
+          setTimeout(() => { card.style.transform = ''; setTimeout(() => card.style.transition = '', 150); }, 120);
+        }
+      }
+    }
+
+    async function doPickup() {
+      if (!allowPickup) return;
+      const order = orders[idx];
+      const btn = overlay.querySelector('#vbcPickup');
+      if (btn) { btn.disabled = true; btn.textContent = '처리 중...'; }
+      try {
+        await api(`/api/orders/${order.id}/pickup`, { method: 'POST' });
+        toast(`${order.name}님 수령 완료`);
+        dataChanged = true;
+        orders.splice(idx, 1);
+        if (orders.length === 0) { close(); return; }
+        if (idx >= orders.length) idx = orders.length - 1;
+        renderVCard(1);
+      } catch (e) {
+        toast(e.message);
+        if (btn) { btn.disabled = false; btn.textContent = '✓ 수령 완료 · 다음'; }
+      }
+    }
+
+    function close() {
+      overlay.removeEventListener('click', overlayClick);
+      document.removeEventListener('keydown', keyHandler);
+      overlay.remove();
+      document.body.style.overflow = '';
+      if (dataChanged && typeof opts.onDataChanged === 'function') opts.onDataChanged();
+      if (typeof opts.onClose === 'function') opts.onClose();
+    }
+
+    function overlayClick(e) {
+      if (e.target === overlay) { close(); return; }
+      const action = e.target.closest?.('[data-action]')?.dataset.action;
+      if (action === 'close') close();
+    }
+    overlay.addEventListener('click', overlayClick);
+    prevBtn.addEventListener('click', () => go(-1));
+    nextBtn.addEventListener('click', () => go(1));
+
+    function keyHandler(e) {
+      if (e.key === 'ArrowLeft') { e.preventDefault(); go(-1); }
+      else if (e.key === 'ArrowRight') { e.preventDefault(); go(1); }
+      else if (e.key === 'Escape') { e.preventDefault(); close(); }
+      else if (allowPickup && e.key === 'Enter') { e.preventDefault(); doPickup(); }
+    }
+    document.addEventListener('keydown', keyHandler);
+
+    // Touch swipe
+    let startX = null, startY = null, dragX = 0, isDragging = false;
+    const SWIPE_THRESHOLD = 55;
+    content.addEventListener('touchstart', (e) => {
+      if (e.touches.length !== 1) return;
+      startX = e.touches[0].clientX; startY = e.touches[0].clientY;
+      isDragging = false; dragX = 0;
+    }, { passive: true });
+    content.addEventListener('touchmove', (e) => {
+      if (startX === null) return;
+      const dx = e.touches[0].clientX - startX;
+      const dy = e.touches[0].clientY - startY;
+      if (!isDragging) {
+        if (Math.abs(dx) > 12 && Math.abs(dx) > Math.abs(dy)) isDragging = true;
+        else if (Math.abs(dy) > 12) { startX = null; return; }
+        else return;
+      }
+      dragX = dx;
+      const card = content.firstElementChild;
+      if (card) {
+        let applied = dx;
+        if ((idx === 0 && dx > 0) || (idx === orders.length - 1 && dx < 0)) applied = dx * 0.3;
+        card.style.transition = 'none';
+        card.style.transform = `translateX(${applied}px)`;
+        card.style.opacity = String(Math.max(0.4, 1 - Math.abs(applied) / 420));
+      }
+    }, { passive: true });
+    content.addEventListener('touchend', () => {
+      if (startX === null) return;
+      const card = content.firstElementChild;
+      if (!isDragging) { startX = null; return; }
+      isDragging = false;
+      const moved = dragX;
+      startX = null; startY = null; dragX = 0;
+      if (card) {
+        card.style.transition = '';
+        if (moved < -SWIPE_THRESHOLD && idx < orders.length - 1) go(1);
+        else if (moved > SWIPE_THRESHOLD && idx > 0) go(-1);
+        else { card.style.transform = ''; card.style.opacity = ''; }
+      }
+    });
+
+    renderVCard(0);
+    return { close };
+  }
+
+  // ===== VERTICAL BARCODE TAB (세로 바코드 테스트 탭) =====
+  // Shows all pending breakfast orders (excl. no_meal) in a list.
+  // Tapping a card opens the vertical barcode viewer with full swipe + pickup support.
+  async function renderActingVerticalTab() {
+    // Reload fresh pending breakfast orders for this date
+    let vbOrders = [];
+    try {
+      const all = await api(`/api/orders/active?meal_type=breakfast&date=${actingDate}`);
+      // Only pending, non-no_meal (미수령 제외)
+      vbOrders = all.filter(o =>
+        o.status !== 'picked_up' &&
+        !(o.selection && o.selection.meal_form === 'no_meal')
+      );
+    } catch { vbOrders = []; }
+
+    const dates = nextNDays(7);
+    const withOrders = new Set(
+      activeSummary.filter(x => x.meal_type === 'breakfast').map(x => x.service_date)
+    );
+
+    root.innerHTML = `
+      ${renderBrand()}
+      <div class="topbar">
+        <button class="btn btn-ghost btn-sm" id="vbBackBtn">← 뒤로</button>
+        <h1 style="flex:1;text-align:center;font-size:17px;">🆔 세로 바코드 테스트</h1>
+        <button class="btn btn-ghost btn-sm" id="vbSwitchRole">전환</button>
+      </div>
+
+      <div class="vb-notice">
+        📌 바코드가 안 찍힐 때 사용하는 테스트용 세로 바코드입니다.<br>
+        신청자를 탭하면 사원증 형태의 바코드가 열립니다.
+      </div>
+
+      <div class="section-title" style="margin-top:12px;">
+        <h2>날짜</h2>
+        <span class="hint">${fmtFull(actingDate)}</span>
+      </div>
+      ${renderDateChips(dates, [actingDate], withOrders)}
+
+      <div class="section-title" style="margin-top:14px;">
+        <h2>대기 중 (${vbOrders.length}건)</h2>
+        <span class="hint">탭 → 세로 바코드</span>
+      </div>
+
+      <div class="order-list">
+        ${vbOrders.length === 0 ? `
+          <div class="empty">
+            <span class="empty-emoji">✅</span>
+            ${fmtDate(actingDate)} 조식 대기 신청이 없거나<br>모두 수령 완료되었어요.
+          </div>
+        ` : vbOrders.map(o => {
+          const menuSummary = o.selection ? summarizeSelection(o.selection) : (o.menu || '');
+          return `
+            <div class="order-card vb-order-card" data-vb-id="${o.id}">
+              <div class="order-main">
+                <div class="meal-badge breakfast">🍳</div>
+                <div class="order-body">
+                  <div class="order-name">
+                    ${escape(o.name)}
+                    <span class="order-eid">${escape(o.employee_id)}</span>
+                  </div>
+                  <div class="order-menu">${escape(menuSummary)}</div>
+                </div>
+                <div class="order-chevron" style="color:#888;font-size:20px;">🆔</div>
+              </div>
+            </div>
+          `;
+        }).join('')}
+      </div>
+
+      ${vbOrders.length > 0 ? `
+        <div style="padding:16px 16px 0;">
+          <button class="btn btn-primary" style="width:100%;" id="vbOpenAll">
+            🆔 전체 ${vbOrders.length}명 세로 바코드 열기
+          </button>
+        </div>
+      ` : ''}
+    `;
+
+    $('#vbBackBtn').addEventListener('click', () => { actingStep = 'choose'; render(); });
+    $('#vbSwitchRole').addEventListener('click', () => { saveRole(null); render(); });
+
+    document.querySelectorAll('[data-date]').forEach(b =>
+      b.addEventListener('click', async () => {
+        actingDate = b.dataset.date;
+        await Promise.all([loadActiveOrders(), loadActiveSummary()]);
+        renderActingVerticalTab();
+      }));
+
+    document.querySelectorAll('[data-vb-id]').forEach(card =>
+      card.addEventListener('click', () => {
+        const id = Number(card.dataset.vbId);
+        const startIdx = vbOrders.findIndex(o => o.id === id);
+        if (startIdx >= 0) {
+          openVerticalBarcodeViewer(vbOrders, startIdx, {
+            allowPickup: true,
+            onDataChanged: async () => {
+              await Promise.all([loadActiveOrders(), loadActiveSummary()]);
+              renderActingVerticalTab();
+            }
+          });
+        }
+      }));
+
+    const openAllBtn = document.querySelector('#vbOpenAll');
+    if (openAllBtn) {
+      openAllBtn.addEventListener('click', () => {
+        openVerticalBarcodeViewer(vbOrders, 0, {
+          allowPickup: true,
+          onDataChanged: async () => {
+            await Promise.all([loadActiveOrders(), loadActiveSummary()]);
+            renderActingVerticalTab();
+          }
+        });
+      });
+    }
   }
 
   // ===== ADMIN =====
