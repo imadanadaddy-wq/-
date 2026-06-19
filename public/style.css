@@ -473,6 +473,11 @@ input, textarea { font-family: inherit; }
 @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
 @keyframes slideUp { from { transform: translateY(20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
 
+/* 바코드 뷰어 모달은 화면 중앙에 배치 (바코드 스캔 인식률 향상) */
+.modal-overlay.viewer-overlay {
+  align-items: center;
+}
+
 .modal {
   background: #fff;
   color: #111;
@@ -557,6 +562,47 @@ input, textarea { font-family: inherit; }
   align-items: center;
 }
 .barcode-wrap svg { width: 100%; max-width: 340px; height: auto; }
+
+/* 세로 바코드 모드 — 명찰처럼 작은 사이즈, 90도 회전, 중앙 배치 */
+.barcode-wrap.vertical {
+  /* 회전 후 점유 높이 확보: 명찰의 세로 바코드 정도 크기 */
+  min-height: 260px;
+  justify-content: center;
+  padding: 16px 24px;
+}
+.barcode-wrap.vertical svg {
+  width: auto;
+  max-width: none;
+  /* 회전 전 가로폭 = 회전 후 높이. 명찰 사이즈에 맞춰 적당히 */
+  max-height: 220px;
+  transform: rotate(90deg);
+  transform-origin: center center;
+}
+
+/* 가로/세로 전환 버튼 */
+.orient-toggle-row {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+  margin: 14px 0 4px;
+}
+.orient-toggle {
+  flex: 0 0 auto;
+  padding: 7px 18px;
+  border-radius: 20px;
+  border: 1.5px solid #e0e0e0;
+  background: #fff;
+  color: #888;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all .15s;
+}
+.orient-toggle.active {
+  background: #111;
+  color: #fff;
+  border-color: #111;
+}
 
 .modal-actions {
   display: flex;
@@ -2288,188 +2334,3 @@ input, textarea { font-family: inherit; }
   color: #888;
   margin-bottom: 8px;
 }
-
-/* ===== VERTICAL BARCODE VIEWER (세로 바코드 테스트) ===== */
-.vbc-overlay {
-  display: flex;
-  align-items: stretch;
-  justify-content: center;
-  background: rgba(0,0,0,0.72);
-}
-.vbc-modal {
-  display: flex;
-  flex-direction: column;
-  width: 100%;
-  max-width: 420px;
-  height: 100%;
-  background: #f5f5f5;
-  overflow: hidden;
-}
-.vbc-header-bar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 14px 18px 10px;
-  background: #fff;
-  border-bottom: 1px solid #e8e8e8;
-  flex-shrink: 0;
-}
-.vbc-close-btn {
-  background: #f0f0f0;
-  border: none;
-  width: 34px; height: 34px;
-  border-radius: 50%;
-  font-size: 18px;
-  color: #555;
-  cursor: pointer;
-  display: flex; align-items: center; justify-content: center;
-}
-.vbc-counter {
-  font-size: 14px;
-  color: #888;
-  font-variant-numeric: tabular-nums;
-  font-weight: 600;
-}
-.vbc-content {
-  flex: 1;
-  overflow-y: auto;
-  -webkit-overflow-scrolling: touch;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 16px;
-}
-.vbc-card {
-  width: 100%;
-  max-width: 340px;
-  background: #fff;
-  border-radius: 20px;
-  box-shadow: 0 4px 24px rgba(0,0,0,0.13);
-  padding: 26px 24px 22px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  will-change: transform, opacity;
-}
-@keyframes vbc-in-right { from { transform: translateX(50%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
-@keyframes vbc-in-left  { from { transform: translateX(-50%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
-.vbc-card.vbc-enter-right { animation: vbc-in-right .22s ease-out; }
-.vbc-card.vbc-enter-left  { animation: vbc-in-left .22s ease-out; }
-
-.vbc-top {
-  text-align: center;
-  margin-bottom: 18px;
-  width: 100%;
-}
-.vbc-date {
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: #aaa;
-  margin-bottom: 6px;
-}
-.vbc-name {
-  font-size: 28px;
-  font-weight: 800;
-  color: #111;
-  letter-spacing: -0.01em;
-  line-height: 1.1;
-}
-.vbc-eid {
-  font-size: 14px;
-  color: #888;
-  margin-top: 3px;
-  font-variant-numeric: tabular-nums;
-}
-.vbc-barcode-area {
-  width: 100%;
-  background: #fff;
-  border-radius: 12px;
-  border: 1.5px solid #e8e8e8;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 12px 8px;
-  margin-bottom: 16px;
-}
-.vbc-svg {
-  width: 100%;
-  max-width: 280px;
-  height: auto;
-  display: block;
-}
-.vbc-menu {
-  width: 100%;
-  text-align: center;
-  font-size: 13px;
-  color: #555;
-  line-height: 1.5;
-  padding: 10px 12px;
-  background: #f9f9f9;
-  border-radius: 10px;
-  min-height: 36px;
-}
-.vbc-footer {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 12px 16px 18px;
-  background: #fff;
-  border-top: 1px solid #e8e8e8;
-  flex-shrink: 0;
-}
-.vbc-nav-btn {
-  background: #f3f4f6;
-  border: none;
-  width: 44px; height: 44px;
-  border-radius: 50%;
-  font-size: 22px;
-  color: #333;
-  cursor: pointer;
-  display: flex; align-items: center; justify-content: center;
-  flex-shrink: 0;
-}
-.vbc-nav-btn:disabled { opacity: 0.3; cursor: default; }
-.vbc-actions {
-  flex: 1;
-  display: flex;
-  justify-content: center;
-}
-.vbc-pickup-btn {
-  background: #111;
-  color: #fff;
-  border-color: #111;
-  width: 100%;
-  font-size: 14px;
-  font-weight: 700;
-  padding: 12px 16px;
-}
-.vbc-pickup-btn:disabled { opacity: 0.5; }
-.vbc-close-action {
-  width: 100%;
-  font-size: 14px;
-  padding: 12px 16px;
-}
-
-/* VB tab notice banner */
-.vb-notice {
-  margin: 10px 4px 0;
-  padding: 12px 14px;
-  background: #fff8e6;
-  border-radius: 12px;
-  border-left: 4px solid #f5a623;
-  font-size: 13px;
-  color: #7a5500;
-  line-height: 1.5;
-}
-.vb-order-card {
-  cursor: pointer;
-}
-.vb-tab-card {
-  display: flex !important;
-  background: #fff;
-  border: 1.5px solid #e0e0e0;
-}
-.vb-tab-card:hover { border-color: #bbb; background: #fafafa; }
