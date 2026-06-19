@@ -1644,21 +1644,23 @@
             const isNoMeal = o.selection && o.selection.meal_form === 'no_meal';
             const isLateNight = o.meal_type === 'late_night';
             const showQuickPickup = isLateNight && !isNoMeal;
+            const isPicked = o.status === 'picked_up';
             return `
-              <div class="order-card ${isNoMeal ? 'no-meal' : ''} ${showQuickPickup ? 'with-quick' : ''}" data-card-id="${o.id}">
+              <div class="order-card ${isNoMeal ? 'no-meal' : ''} ${showQuickPickup ? 'with-quick' : ''} ${isPicked ? 'order-done' : ''}" data-card-id="${o.id}">
                 <div class="order-main" data-id="${o.id}">
                   <div class="meal-badge ${o.meal_type}">${isNoMeal ? '🙅‍♀️' : mealEmoji(o.meal_type)}</div>
                   <div class="order-body">
                     <div class="order-name">
                       ${escape(o.name)}
                       <span class="order-eid">${escape(o.employee_id)}</span>
+                      ${isPicked ? '<span class="done-badge">✓ 수령완료</span>' : ''}
                     </div>
                     ${renderOrderDetailDark(o)}
                   </div>
-                  ${showQuickPickup ? '' : '<div class="order-chevron">›</div>'}
+                  ${showQuickPickup ? '' : (isPicked ? '' : '<div class="order-chevron">›</div>')}
                 </div>
                 ${showQuickPickup ? `
-                  <button class="quick-pickup" data-quick-pickup="${o.id}" aria-label="수령 완료">
+                  <button class="quick-pickup ${isPicked ? 'done' : ''}" data-quick-pickup="${o.id}" aria-label="수령 완료" ${isPicked ? 'disabled' : ''}>
                     <span class="qp-check">✓</span>
                     <span class="qp-text">수령<br/>완료</span>
                   </button>
@@ -1713,9 +1715,10 @@
         if (startIdx >= 0) {
           openOrderViewer(list, startIdx, {
             allowPickup: true,
-            onDataChanged: async () => {
-              await Promise.all([loadActiveOrders(), loadActiveSummary()]);
-              renderActing();
+            onDataChanged: () => {
+              // activeOrders는 재조회 않음 (picked_up 항목도 목록에 유지)
+              // summary만 갱신해서 날짜 칩 카운트 반영
+              loadActiveSummary().then(() => renderActing());
             }
           });
         }
@@ -2121,7 +2124,16 @@
         dataChanged = true;
         // 목록에서 제거하지 않고 status만 갱신 → 바코드/사번 그대로 유지
         order.status = 'picked_up';
-        renderCard(0);
+        // activeOrders에서도 동일 order status 갱신 (목록 재조회 없이 유지)
+        const ao = activeOrders.find(o => o.id === order.id);
+        if (ao) ao.status = 'picked_up';
+        // 다음 사람으로 이동 (마지막이면 현재 카드 재렌더)
+        if (idx < orders.length - 1) {
+          idx++;
+          renderCard(1);
+        } else {
+          renderCard(0);
+        }
       } catch (e) {
         toast(e.message);
         if (btn) { btn.disabled = false; btn.textContent = '수령 완료 · 다음'; }
